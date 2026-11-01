@@ -31,7 +31,11 @@ from PyQt6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
 
 # ------------------------------------------------------------------ config
 APP_NAME = "Legacy ARK Launcher"
-VERSION = "v1.63.0"
+VERSION = "v1.64.0"
+# v1.64.0: startup window diagnostic removed — no more launcher-windows.log
+# created next to the exe on every launch (leftover from the v1.28.8/v1.28.9
+# flashing-windows hunt; that bug was confirmed fixed in v1.28.13).
+# launcher-error.log (crash-only) and the in-app log + Save log stay.
 # v1.54.0: top-bar Discord button, wired at the user's order Nov 1, 2026.
 # This invite supersedes the v1.46 placeholder (no link) for this button only.
 # Community Servers tab, Sponsored servers, and the pirate Watch link are
@@ -430,22 +434,12 @@ def _app_dir():
     return Path(__file__).resolve().parent
 
 def _dump_windows(tag):
-    """Log top-level Qt windows at this exact moment (even mid-build).
-    Writes to launcher-windows.log next to the .py. Safe to call
-    anywhere, including inside MainWindow.__init__ before show()."""
-    try:
-        from PyQt6.QtWidgets import QApplication as _QA
-        _app = _QA.instance()
-        if _app is None:
-            return
-        _lines = [f"{tag}: {len(_app.topLevelWidgets())} top-level widgets"]
-        for _w in _app.topLevelWidgets():
-            _g = _w.geometry()
-            _lines.append(f"  {type(_w).__name__} title={_w.windowTitle()!r} visible={_w.isVisible()} geom={_g.x()},{_g.y()},{_g.width()}x{_g.height()}")
-        with open(_app_dir() / "launcher-windows.log", "a", encoding="utf-8") as _f:
-            _f.write("\n".join(_lines) + "\n")
-    except Exception:
-        pass
+    """RETIRED in v1.64.0: the v1.28.8/v1.28.9 flashing-windows diagnostic.
+    It wrote launcher-windows.log next to the exe on every launch; the
+    flashing bug was confirmed fixed in v1.28.13, so the diagnostic is
+    gone and no log file is created anymore. Kept as a no-op so the
+    old call sites stay harmless."""
+    return
 
 
 def _resource(name):
@@ -8053,26 +8047,9 @@ def main():
     if store.get("start_maximized"):
         try: win.showMaximized()
         except Exception: pass
-    # Diagnostic for the mystery launch window (v1.28.8): list every
-    # top-level Qt window this process actually creates. Assets
-    # (logo.png, art/*.jpg) are QPixmaps — images in memory, not
-    # windows — so they cannot appear here. If the rectangle is a
-    # launcher window, it will show up with its title/geometry.
-    try:
-        def _log_windows(tag):
-            try:
-                _lines = [f"{tag}: {len(app.topLevelWidgets())} top-level widgets"]
-                for _w in app.topLevelWidgets():
-                    _g = _w.geometry()
-                    _lines.append(f"  {type(_w).__name__} title={_w.windowTitle()!r} visible={_w.isVisible()} geom={_g.x()},{_g.y()},{_g.width()}x{_g.height()}")
-                with open(_app_dir() / "launcher-windows.log", "a", encoding="utf-8") as _f:
-                    _f.write("\n".join(_lines) + "\n")
-            except Exception:
-                pass
-        _log_windows("startup")
-        QTimer.singleShot(3000, lambda: _log_windows("after-3s"))
-    except Exception:
-        pass
+    # v1.64.0: the v1.28.8 startup window diagnostic (which wrote
+    # launcher-windows.log on every launch) is removed — the flashing
+    # bug it hunted was fixed in v1.28.13, so no log file is created.
     # Rich Presence idle status: show "Legacy ARK Launcher / Browsing
     # builds" as soon as the launcher opens (not only when a game
     # launches). v1.60: NOT silent anymore — if presence is ON and it
