@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
 
 # ------------------------------------------------------------------ config
 APP_NAME = "Legacy ARK Launcher"
-VERSION = "v1.62.0"
+VERSION = "v1.63.0"
 # v1.54.0: top-bar Discord button, wired at the user's order Nov 1, 2026.
 # This invite supersedes the v1.46 placeholder (no link) for this button only.
 # Community Servers tab, Sponsored servers, and the pirate Watch link are
@@ -103,7 +103,7 @@ def discord_set_playing(client_id, build_name):
         discord_clear()
         rpc = Presence(client_id)
         rpc.connect()
-        rpc.update(details="Legacy ARK Launcher", state=f"Playing ARK {build_name}", start=int(time.time()))
+        rpc.update(details="Legacy ARK Launcher", state=f"Playing ARK {build_name}", start=int(time.time()), large_image="logo", large_text="Legacy ARK Launcher")  # v1.63: "logo" art asset must be uploaded in Discord Developer Portal > Rich Presence > Art Assets, named exactly "logo" (use logo.png, or the user's custom logo file when he sends it) — without that upload Discord shows "?" as in his Nov 1 01:28 screenshot.
         _DISCORD_RPC = rpc
         return True, ""
     except Exception as e:
@@ -122,7 +122,7 @@ def discord_set_idle(client_id):
         discord_clear()
         rpc = Presence(client_id)
         rpc.connect()
-        rpc.update(details="Legacy ARK Launcher", state="Browsing builds", start=int(time.time()))
+        rpc.update(details="Legacy ARK Launcher", state="Browsing builds", start=int(time.time()), large_image="logo", large_text="Legacy ARK Launcher")  # v1.63: same "logo" asset as playing.
         _DISCORD_RPC = rpc
         return True, ""
     except Exception as e:
@@ -2246,7 +2246,7 @@ class SettingsPage(QWidget):
         # Toggle OFF by default — turn it on here, then hit Test. Test
         # shows the exact failure reason, it never silently does nothing.
         v.addWidget(self._header("DISCORD"))
-        _sg = QLabel("Discord Rich Presence shows Legacy ARK Launcher + the build you are playing as your Discord status. This needs the Discord desktop app open on your PC, and pypresence installed (build-exe.bat and start-launcher.bat install it). The JOIN DISCORD button at the top is separate — that is just a link to join the community, it is not presence."); _sg.setObjectName("Muted"); _sg.setWordWrap(True); v.addWidget(_sg)
+        _sg = QLabel("Discord Rich Presence shows Legacy ARK Launcher + the build you are playing as your Discord status. This needs the Discord desktop app open on your PC, and pypresence installed (build-exe.bat and start-launcher.bat install it). To show a logo instead of Discord's \"?\" placeholder next to the status: go to discord.com/developers/applications, open the Legacy ARK Launcher app, upload logo.png as the App Icon AND as a Rich Presence Art Asset named exactly \"logo\" — the code already sends large_image=\"logo\", but Discord can only show it after you upload that asset. If you have a different custom logo, send it to Muse and he will swap logo.png/logo.ico to it. The JOIN DISCORD button at the top is separate — that is just a link to join the community, it is not presence."); _sg.setObjectName("Muted"); _sg.setWordWrap(True); v.addWidget(_sg)
         self.discord_t = ToggleSwitch(bool(self.store.get("discord_rich_presence")))
         self.discord_t.toggled.connect(self._on_discord_toggled)
         self.discord_hint = QLabel(""); self.discord_hint.setObjectName("Muted"); self.discord_hint.setWordWrap(True)
