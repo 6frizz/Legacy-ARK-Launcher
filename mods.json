@@ -1,0 +1,194 @@
+{
+  "_note": "Ranges verified Oct 30, 2026 against Steam's Workshop API (ISteamRemoteStorage/GetPublishedFileDetails): min_build is now anchored to each Workshop page's creation date \u2014 a mod cannot be compatible with a build dated before it existed. 11 mins were corrected (Death Helper/Pet Finder Jun 2015->Dec 2015, Platforms Anywhere Jun 2015->Oct 2016, Platforms Plus Jun 2016->Jul 2016, Advanced Rafts Jun 2016->Aug 2016, eco's RP Decor Jun 2016->Aug 2016, eco's Garden Decor Jun 2016->March 2017, eco's Stable Structures Jun 2017->Jul 2017, Stack Me More Jun 2016->Oct 2017 for the moved page 1184731864, Stacks Evolved Jun 2017->Dec 2017, Super Structures Jul 2019->Feb 2020 \u2014 Jul 2019 was the S+ release it forked from, not this page's release). Max_build remains best-effort: a max past a mod's last update is an unverified tail, not proof it stops working, and S+'s Jul 2019 max is a fork/switch recommendation, not a hard limit. Coverage consequence, stated honestly: Jun-Sep 2015 builds now have 0 compatible mods and Oct-Nov 2015 have 1 (Advanced Architecture only) \u2014 ARK Workshop modding did not exist at the Jun 2015 launch, the earliest mod here was created Oct 2015. A Workshop download is always the latest cooked version, not the era version, so even a corrected range is not a guarantee that the download works on that old build.",
+  "mods": [
+    {
+      "name": "Death Helper",
+      "workshop_id": "566885854",
+      "description": "Marks your death spot and helps you recover your corpse and items after you die. Clean and stackable, does not touch core files.",
+      "min_build": "Dec 2015 build",
+      "max_build": "Jun 2017 build"
+    },
+    {
+      "name": "Pet Finder",
+      "workshop_id": "566887000",
+      "description": "Track down lost tames with an on-screen finder \u2014 points you at your dinos instead of wandering the map.",
+      "min_build": "Dec 2015 build",
+      "max_build": "Jun 2017 build"
+    },
+    {
+      "name": "Platforms Anywhere",
+      "workshop_id": "779897534",
+      "description": "Build structures on platform saddles and rafts almost anywhere \u2014 foundations snap to dino platforms instead of being blocked.",
+      "min_build": "Oct 2016 build",
+      "max_build": "Jun 2017 build"
+    },
+    {
+      "name": "Advanced Architecture Mod",
+      "workshop_id": "539464369",
+      "description": "Early building mod: foundations that flatten tricky spots, bridges, drawbridges, castle walls and battlements. In use from Oct 2015 onward.",
+      "min_build": "Oct 2015 build",
+      "max_build": "Jun 2017 build"
+    },
+    {
+      "name": "Structures Plus (S+)",
+      "workshop_id": "731604991",
+      "description": "Stackable foundations, flush ceilings, crop plots that snap to foundations, sloped walls that snap under ceilings, and more. The classic 2016-2019 building mod.",
+      "min_build": "Jul 2016 build",
+      "max_build": "Jul 2019 build"
+    },
+    {
+      "name": "Platforms Plus",
+      "workshop_id": "719928795",
+      "description": "Tree platforms with snap points for perimeter walls, extending ceilings, ladders, ramps and catwalks. Later folded into Structures Plus.",
+      "min_build": "Jul 2016 build",
+      "max_build": "Dec 2017 build"
+    },
+    {
+      "name": "Pillars Plus",
+      "workshop_id": "708807240",
+      "description": "Fully adjustable pillars: straight, round and sloped, in wood, stone and metal. Later folded into Structures Plus.",
+      "min_build": "Aug 2016 build",
+      "max_build": "Dec 2017 build"
+    },
+    {
+      "name": "Reusable Plus",
+      "workshop_id": "693416678",
+      "description": "Reusable versions of common tools: bola, flare gun, grappling hook, parachute and more \u2014 use them over and over instead of re-crafting.",
+      "min_build": "Jun 2016 build",
+      "max_build": "Dec 2018 build"
+    },
+    {
+      "name": "Stack Me More",
+      "workshop_id": "1184731864",
+      "description": "Reduced-weight resources with much higher stack sizes. This is the moved/updated Stack Me More page \u2014 the original 680481868 page points here.",
+      "min_build": "Oct 2017 build",
+      "max_build": "Jun 2021 build"
+    },
+    {
+      "name": "Annunaki Genesis",
+      "workshop_id": "538986229",
+      "description": "Overhaul with new creatures, bosses and tiers on top of vanilla ARK. The 2016-era version \u2014 later Annunaki releases target newer game builds.",
+      "min_build": "Aug 2016 build",
+      "max_build": "Dec 2017 build"
+    },
+    {
+      "name": "Ark Steampunk Mod",
+      "workshop_id": "679529026",
+      "description": "Steampunk-themed structures and gear: gears, whirs and clanks for a different-looking base. In use on 2016 servers.",
+      "min_build": "Jun 2016 build",
+      "max_build": "Dec 2017 build"
+    },
+    {
+      "name": "Advanced Rafts",
+      "workshop_id": "749466101",
+      "description": "Advanced rafts, sails and more for ship building, with selectable third-person camera zoom and cargo holds.",
+      "min_build": "Aug 2016 build",
+      "max_build": "Dec 2019 build"
+    },
+    {
+      "name": "Castles, Keeps, and Forts (Legacy)",
+      "workshop_id": "764755314",
+      "description": "Over 100 medieval building options: castles, forts, keeps and more. This is the Legacy version \u2014 use the Remastered version on current game builds instead.",
+      "min_build": "Dec 2016 build",
+      "max_build": "Jun 2020 build"
+    },
+    {
+      "name": "eco's RP Decor",
+      "workshop_id": "741203089",
+      "description": "Decorative furniture and tons of other items for roleplay bases. 100% stackable, items can be picked up.",
+      "min_build": "Aug 2016 build",
+      "max_build": "Jun 2024 build"
+    },
+    {
+      "name": "eco's Garden Decor",
+      "workshop_id": "880871931",
+      "description": "Fountains, topiary, indoor/outdoor lighting, fences and planters for your garden. 100% stackable.",
+      "min_build": "March 2017 build",
+      "max_build": "Jun 2024 build"
+    },
+    {
+      "name": "eco's Stable Structures",
+      "workshop_id": "1091147617",
+      "description": "Rustic structures, old-west decor and storage for stables, ranches, barns and western towns. 100% stackable.",
+      "min_build": "Jul 2017 build",
+      "max_build": "Jun 2024 build"
+    },
+    {
+      "name": "eco's Camping",
+      "workshop_id": "926567353",
+      "description": "Decorative items for a camping setup. 100% stackable, items can be picked up.",
+      "min_build": "Jun 2017 build",
+      "max_build": "Jun 2024 build"
+    },
+    {
+      "name": "Classic Flyers",
+      "workshop_id": "895711211",
+      "description": "Brings back pre-nerf flyers: vanilla flyer species get their old stats back, including levelling speed again. Only makes sense on builds after the Mar 2017 flyer nerf.",
+      "min_build": "Apr 2017 build",
+      "max_build": "Jun 2024 build"
+    },
+    {
+      "name": "Ultra Stacks",
+      "workshop_id": "761535755",
+      "description": "Stacking mod, final version 2.21 (Aug 22, 2020), no longer updated as of Jun 5, 2021 \u2014 use a newer stacking mod on later builds.",
+      "min_build": "Aug 2017 build",
+      "max_build": "Jun 2021 build"
+    },
+    {
+      "name": "Stacks Evolved",
+      "workshop_id": "1236583890",
+      "description": "Balanced stacks without edited weights \u2014 bigger stacks for low/normal-rate play, without the weight changes of other stacking mods.",
+      "min_build": "Dec 2017 build",
+      "max_build": "Jun 2024 build"
+    },
+    {
+      "name": "Death Recovery Mod",
+      "workshop_id": "751991809",
+      "description": "Alternative death-recovery mod from the 2016 era: recover items and folders after you die. Alternative to Death Helper.",
+      "min_build": "Oct 2016 build",
+      "max_build": "Dec 2019 build"
+    },
+    {
+      "name": "Awesome SpyGlass!",
+      "workshop_id": "1404697612",
+      "description": "Like a regular SpyGlass, except awesomer: shows stats for dinos, players, structures, eggs, loot and supply drops, with player-customisable options.",
+      "min_build": "Jun 2018 build",
+      "max_build": "Jun 2024 build"
+    },
+    {
+      "name": "Ark Eternal (Live Version)",
+      "workshop_id": "893735676",
+      "description": "Big overhaul: new creatures, tiers and systems. NOTE: Ark Eternal does NOT support singleplayer \u2014 server play only, and it is a heavy overhaul, not a QoL mod.",
+      "min_build": "Jun 2018 build",
+      "max_build": "Jun 2024 build"
+    },
+    {
+      "name": "Simple Spawners",
+      "workshop_id": "1295978823",
+      "description": "Spawn creatures, harvestable resources, loot crates or nests anywhere. Clean and stackable \u2014 make your own biomes.",
+      "min_build": "Jun 2018 build",
+      "max_build": "Jun 2024 build"
+    },
+    {
+      "name": "Additional Creatures 2: Wild Ark",
+      "workshop_id": "1373744537",
+      "description": "Adds new wild creatures to the ARK. A content mod, not a QoL mod \u2014 check its own page for its creature list and load-order notes.",
+      "min_build": "Jun 2018 build",
+      "max_build": "Jun 2024 build"
+    },
+    {
+      "name": "Dino Storage v2",
+      "workshop_id": "1609138312",
+      "description": "Store dinos in soul balls / terminals: clean and stackable, no game content remapped or altered, works with modded dinos too.",
+      "min_build": "Jun 2019 build",
+      "max_build": "Jun 2024 build"
+    },
+    {
+      "name": "Super Structures",
+      "workshop_id": "1999447172",
+      "description": "Fork of Structures Plus from its July 11, 2019 release \u2014 everything S+ had at that time, maintained after S+ stopped. Use this instead of S+ on 2019+ builds.",
+      "min_build": "Feb 2020 build",
+      "max_build": "Jun 2024 build"
+    }
+  ]
+}

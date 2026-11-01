@@ -1,0 +1,28 @@
+# User settings and runtime data — never commit these
+# (settings live in ~/.cml-launcher/settings.json on the user's PC, not in the repo)
+.cml-launcher/
+settings.json
+
+# SteamCMD and downloaded builds — large, user-specific, and Steam-owned
+steamcmd/
+CML-ARK/
+
+# Logs and crash files
+launcher-windows.log
+launcher-error.log
+*.log
+
+# Python / PyQt
+__pycache__/
+*.pyc
+*.pyo
+
+# PyInstaller build output
+build/
+dist/
+*.exe
+*.spec.bak
+
+# Backups and user files
+*.bak
+*.zip

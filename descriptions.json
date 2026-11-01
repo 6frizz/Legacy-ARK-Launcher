@@ -1,0 +1,390 @@
+{
+  "Apr 2016 build": {
+    "desc": "Spring 2016 \u2014 the last weeks before The Center became an official map.",
+    "title": "Center's Eve"
+  },
+  "Apr 2017 build": {
+    "desc": "Spring 2017 \u2014 TEK Tier was the endgame, and the wait for Ragnarok had begun.",
+    "title": "TEK Frontier"
+  },
+  "Apr 2018 build": {
+    "desc": "Post-TLC spring \u2014 reworked classics settling into the meta.",
+    "title": "Direwolf's Howl"
+  },
+  "Apr 2019 build": {
+    "desc": "Spring 2019 \u2014 balance passes and fixes in the post-Extinction era.",
+    "title": "Managarmr's Spring"
+  },
+  "Apr 2020 build": {
+    "desc": "Spring 2020 \u2014 Genesis missions and hexagons were the daily loop.",
+    "title": "Hexagon Hustle"
+  },
+  "Apr 2021 build": {
+    "desc": "The last stretch before Genesis Part 2.",
+    "title": "Final Approach"
+  },
+  "Apr 2022 build": {
+    "desc": "The last stretch before Fjordur.",
+    "title": "Runestone Eve"
+  },
+  "Aug 2015 build": {
+    "desc": "Early Access summer 2015. The Island only, with near-weekly patches adding creatures, structures, and fixes.",
+    "title": "First Tames"
+  },
+  "Aug 2016 build": {
+    "desc": "Late summer 2016 \u2014 the last build before Scorched Earth turned up the heat.",
+    "title": "Ember's Edge"
+  },
+  "Aug 2017 build": {
+    "desc": "ARK leaves Early Access on August 29, 2017. The game is officially out.",
+    "title": "Launch Day"
+  },
+  "Aug 2018 build": {
+    "desc": "Late summer 2018 \u2014 the calm before Extinction.",
+    "title": "Titan's Shadow"
+  },
+  "Aug 2019 build": {
+    "desc": "Late summer 2019 \u2014 Valguero era, with Genesis on the way.",
+    "title": "HLN-A's Signal"
+  },
+  "Aug 2020 build": {
+    "desc": "Summer 2020 \u2014 Crystal Isles era, Genesis 2 still far off.",
+    "title": "Tropeognathus Skies"
+  },
+  "Aug 2021 build": {
+    "desc": "Summer 2021 \u2014 Genesis 2 era, Lost Island still to come.",
+    "title": "Voidwyrm Skies"
+  },
+  "Aug 2022 build": {
+    "desc": "Summer 2022 \u2014 Fjordur era, with ARK's 7th anniversary in the rearview.",
+    "title": "Desmodus Nights"
+  },
+  "Dec 2015 build": {
+    "desc": "Winter Wonderland 2015 \u2014 ARK's first winter event, with Raptor Claus and festive drops over The Island.",
+    "title": "Raptor Claus"
+  },
+  "Dec 2016 build": {
+    "desc": "End of 2016 \u2014 right after the PS4 launch. Three maps deep, with TEK Tier weeks away.",
+    "title": "PlayStation Landing"
+  },
+  "Dec 2017 build": {
+    "desc": "Aberration launched December 12, 2017 \u2014 the underground map with Nameless, Reapers, and no sunlight.",
+    "title": "Reaper's Rise"
+  },
+  "Dec 2018 build": {
+    "desc": "First Extinction winter \u2014 Titan fights, OSD defenses, and holiday events.",
+    "title": "Snow Titan"
+  },
+  "Dec 2019 build": {
+    "desc": "End of 2019 \u2014 Genesis still coming, winter events keeping things warm.",
+    "title": "Raptor Claus Returns"
+  },
+  "Dec 2020 build": {
+    "desc": "End of 2020 \u2014 Genesis 2 coming, winter events in full swing.",
+    "title": "Cold Simulation"
+  },
+  "Dec 2021 build": {
+    "desc": "Lost Island launched December 14, 2021 \u2014 the free map with Amargasaurus, Sinomacrops, and Dinopithecus.",
+    "title": "Amargasaurus Landing"
+  },
+  "Dec 2022 build": {
+    "desc": "End of 2022 \u2014 the last full year of ASE as the main game.",
+    "title": "Last ASE Winter"
+  },
+  "Feb 2016 build": {
+    "desc": "Patch 233 era \u2014 Gallimimus, beer, the Dung Beetle, Dimetrodon, Riot Armor, and greenhouses arrived around this time.",
+    "title": "Gallimimus Run"
+  },
+  "Feb 2017 build": {
+    "desc": "Post-TEK February \u2014 power armor everywhere, plus the Valentine's event with chocolates and bonus mating.",
+    "title": "Chocolate & TEK"
+  },
+  "Feb 2018 build": {
+    "desc": "Late winter 2018 \u2014 the last build before the Dino TLC pass reworked the classics.",
+    "title": "Rex's Eve"
+  },
+  "Feb 2019 build": {
+    "desc": "Winter 2019 \u2014 steady fixes and balance in the post-Extinction era.",
+    "title": "Enforcer's Rest"
+  },
+  "Feb 2020 build": {
+    "desc": "Genesis Part 1 launched February 25, 2020 \u2014 five simulated biomes, missions, and HLN-A.",
+    "title": "Into the Simulation"
+  },
+  "Feb 2021 build": {
+    "desc": "February 2021 \u2014 Genesis Part 2 still months out.",
+    "title": "Starship Wait"
+  },
+  "Feb 2022 build": {
+    "desc": "Winter 2022 \u2014 Lost Island era, Fjordur on the horizon.",
+    "title": "Dinopithecus Winter"
+  },
+  "Jan 2016 build": {
+    "desc": "Early 2016 Early Access. The Island only, with the usual drumbeat of patches, new dinos, and tweaks.",
+    "title": "Spear & Torch"
+  },
+  "Jan 2017 build": {
+    "desc": "Patch 254 \u2014 TEK Tier Phase 1. Power armor, TEK rifles, the Replicator, and boss fights for Element.",
+    "title": "TEK Awakening"
+  },
+  "Jan 2018 build": {
+    "desc": "First full month of Aberration. Cave bases, climbing picks, and Reaper queens.",
+    "title": "Nameless Deep"
+  },
+  "Jan 2019 build": {
+    "desc": "Early 2019 \u2014 the full ARK saga was playable start to finish, with balance passes ongoing.",
+    "title": "After the Titans"
+  },
+  "Jan 2020 build": {
+    "desc": "January 2020 \u2014 Genesis Part 1 was weeks away after its delay.",
+    "title": "Simulation Eve"
+  },
+  "Jan 2021 build": {
+    "desc": "Early 2021 \u2014 the wait for Genesis Part 2.",
+    "title": "Colony Eve"
+  },
+  "Jan 2022 build": {
+    "desc": "First full Lost Island winter. Amargasaurus spikes everywhere.",
+    "title": "Sinomacrops Winter"
+  },
+  "Jan 2023 build": {
+    "desc": "Early 2023 \u2014 ASE in its final chapter as Ascended took shape.",
+    "title": "Ascended Shadows"
+  },
+  "Jul 2015 build": {
+    "desc": "Second month of Early Access. The Island was still small, patches landed constantly, and everyone was figuring the game out.",
+    "title": "Raptor Dawn"
+  },
+  "Jul 2016 build": {
+    "desc": "Patch 245 era \u2014 the Center mega-update, Primitive+ as free DLC, fishing, Pelagornis, and Allosaurus.",
+    "title": "Pelagornis Skies"
+  },
+  "Jul 2017 build": {
+    "desc": "First full Ragnarok summer. The new map was the place to be, with the full launch closing in.",
+    "title": "Highlands Summer"
+  },
+  "Jul 2018 build": {
+    "desc": "Mid-2018 \u2014 Extinction's story notes started dropping in the world, with the expansion months out.",
+    "title": "Notes in the Dark"
+  },
+  "Jul 2019 build": {
+    "desc": "First full Valguero summer. Deinonychus nests were the new endgame rush.",
+    "title": "Nest Raider Summer"
+  },
+  "Jul 2020 build": {
+    "desc": "First full Crystal Isles summer. Wyvern trenches and sky islands.",
+    "title": "Sky Islands Summer"
+  },
+  "Jul 2021 build": {
+    "desc": "First full Genesis 2 summer. The starship was the new home.",
+    "title": "Astrodelphis Summer"
+  },
+  "Jul 2022 build": {
+    "desc": "First full Fjordur summer. Runestones, bosses, and Norse bases.",
+    "title": "Andrewsarchus Summer"
+  },
+  "Jun 2015 build": {
+    "desc": "Early Access launch month \u2014 June 2015. The Island, raw and brand new. The very beginning.",
+    "title": "First Footprints"
+  },
+  "Jun 2016 build": {
+    "desc": "Early summer 2016 \u2014 The Island and The Center, with cross-map transfers and a growing creature roster.",
+    "title": "Twin Maps"
+  },
+  "Jun 2017 build": {
+    "desc": "Ragnarok launched June 12, 2017 \u2014 the huge free map with Griffins, Ice Wyverns, and a bit of everything.",
+    "title": "Griffin Landing"
+  },
+  "Jun 2018 build": {
+    "desc": "Summer 2018 \u2014 Aberration-era ARK with a mature roster and the Extinction tease building.",
+    "title": "Corruption Whispers"
+  },
+  "Jun 2019 build": {
+    "desc": "Valguero launched June 18, 2019 \u2014 the free map with Deinonychus, Chalk Hills, and the Aberration trench.",
+    "title": "Deinonychus Landing"
+  },
+  "Jun 2020 build": {
+    "desc": "Crystal Isles launched June 11, 2020 \u2014 the free fantasy map with Crystal Wyverns and floating islands.",
+    "title": "Crystal Wyvern Landing"
+  },
+  "Jun 2021 build": {
+    "desc": "Genesis Part 2 launched June 3, 2021 \u2014 the starship, the colony, and the end of the Genesis saga.",
+    "title": "Starship Landing"
+  },
+  "Jun 2022 build": {
+    "desc": "Fjordur launched June 12, 2022 \u2014 the Norse free map with four new creatures and boss realms.",
+    "title": "Fenrir's Landing"
+  },
+  "Jun 2023 build": {
+    "desc": "Summer 2023 \u2014 the last ASE summer before the final update.",
+    "title": "Final Summer"
+  },
+  "Jun 2024 build": {
+    "desc": "Mid-2024 \u2014 one of the last ASE builds. The classic game, frozen in time.",
+    "title": "Frozen in Time"
+  },
+  "Mar 2016 build": {
+    "desc": "Late-winter 2016. The Island was still the only map, with The Center's official release just weeks away.",
+    "title": "Before The Center"
+  },
+  "Mar 2018 build": {
+    "desc": "Patch 278 \u2014 the TLC pass reworked the Rex, Procoptodon, Gigantopithecus, Direwolf, and Direbear with new models and abilities.",
+    "title": "Rex Reborn"
+  },
+  "Mar 2019 build": {
+    "desc": "Spring 2019 \u2014 quality-of-life and building improvements kept landing in the post-Extinction era.",
+    "title": "Scout's Spring"
+  },
+  "Mar 2020 build": {
+    "desc": "First full Genesis month \u2014 missions, Magmasaurs, Ferox, and Crystal Isles announced for summer.",
+    "title": "Magmasaur's March"
+  },
+  "Mar 2021 build": {
+    "desc": "Spring 2021 \u2014 Genesis Part 2 approaching.",
+    "title": "Voyager's Spring"
+  },
+  "Mar 2022 build": {
+    "desc": "Spring 2022 \u2014 the Norse map was on the way.",
+    "title": "Norse Whispers"
+  },
+  "Mar 2023 build": {
+    "desc": "March 2023 \u2014 the Explorer Note voiceovers patch landed, plus fixes and exploits squashed.",
+    "title": "Explorer's Voice"
+  },
+  "Mar 2024 build": {
+    "desc": "March 2024 \u2014 the ARK: Animated Series skin pack landed on ASE.",
+    "title": "Animated Skins"
+  },
+  "March 2017 build": {
+    "desc": "The reference build \u2014 March 2017, TEK Tier era with The Center, Primitive+, and Scorched Earth. The old-school ARK most people remember.",
+    "title": "The CML Classic"
+  },
+  "May 2016 build": {
+    "desc": "The Center became an official free map on May 17, 2016. Two maps, one ARK.",
+    "title": "Center Landing"
+  },
+  "May 2017 build": {
+    "desc": "The last build before Ragnarok. Everyone was waiting on the next big free map.",
+    "title": "Griffin's Eve"
+  },
+  "May 2018 build": {
+    "desc": "The TLC era rolls on \u2014 old dinos, new life.",
+    "title": "Procoptodon's Leap"
+  },
+  "May 2019 build": {
+    "desc": "The last build before Valguero. A new free map was weeks away.",
+    "title": "Deinonychus Eve"
+  },
+  "May 2020 build": {
+    "desc": "The last build before Crystal Isles. A free map was weeks away.",
+    "title": "Crystal Wyvern's Eve"
+  },
+  "Nov 2015 build": {
+    "desc": "Post-Halloween Early Access. Back to steady patches, new creatures, and the grind toward winter.",
+    "title": "Dodo Days"
+  },
+  "Nov 2016 build": {
+    "desc": "Late 2016 \u2014 The Island, The Center, and Scorched Earth, with the console launches building momentum.",
+    "title": "Tri-Map Era"
+  },
+  "Nov 2017 build": {
+    "desc": "The last build before Aberration. Underground ARK was about to change everything.",
+    "title": "Into the Dark"
+  },
+  "Nov 2018 build": {
+    "desc": "Extinction launched November 6, 2018 \u2014 corrupted Earth, Titans, Orbital Supply Drops, and the end of the ARK story.",
+    "title": "Titanfall"
+  },
+  "Nov 2019 build": {
+    "desc": "Late 2019 \u2014 Genesis slipped from its original December window.",
+    "title": "Delayed Simulation"
+  },
+  "Nov 2020 build": {
+    "desc": "Late 2020 \u2014 Genesis Part 2 was on the horizon.",
+    "title": "Starship Signal"
+  },
+  "Nov 2021 build": {
+    "desc": "The last build before Lost Island. A new free map was weeks away.",
+    "title": "Amargasaurus Eve"
+  },
+  "Nov 2022 build": {
+    "desc": "Late 2022 \u2014 the Fjordur era winds down toward the final ASE chapter.",
+    "title": "Fading Light"
+  },
+  "Oct 2015 build": {
+    "desc": "Halloween 2015 \u2014 ARK's first seasonal event, Fear Evolved, brought spooky skins and event creatures to The Island.",
+    "title": "Fear Evolved"
+  },
+  "Oct 2016 build": {
+    "desc": "First full month of Scorched Earth. Desert bases, sandstorms, and Wyvern taming were the new meta.",
+    "title": "Desert Storms"
+  },
+  "Oct 2017 build": {
+    "desc": "October 2017 \u2014 Halloween season on a launched game, with Aberration weeks away.",
+    "title": "Fear Evolved II"
+  },
+  "Oct 2018 build": {
+    "desc": "October 2018 \u2014 Extinction weeks away.",
+    "title": "King Titan's Eve"
+  },
+  "Oct 2019 build": {
+    "desc": "October 2019 \u2014 seasonal events and the long wait for Genesis.",
+    "title": "Haunted Wait"
+  },
+  "Oct 2020 build": {
+    "desc": "October 2020 \u2014 seasonal events in the Crystal Isles era.",
+    "title": "Fear in the Isles"
+  },
+  "Oct 2021 build": {
+    "desc": "October 2021 \u2014 seasonal events in the Genesis 2 era.",
+    "title": "Fear in the Colony"
+  },
+  "Oct 2022 build": {
+    "desc": "October 2022 \u2014 seasonal events in the Fjordur era.",
+    "title": "Fear in Fjordur"
+  },
+  "Oct 2023 build": {
+    "desc": "Post-final-update ASE \u2014 the game lives on through unofficial servers and single-player.",
+    "title": "Unofficial Forever"
+  },
+  "Sep 2015 build": {
+    "desc": "Early Access autumn 2015. The game was growing fast with steady patches, new tames, and balance passes.",
+    "title": "Trike Territory"
+  },
+  "Sep 2016 build": {
+    "desc": "Scorched Earth launched September 1, 2016 \u2014 ARK's first paid expansion. Desert survival, Wyverns, and brutal heat.",
+    "title": "Wyvern's Wake"
+  },
+  "Sep 2017 build": {
+    "desc": "First month after full launch. Polish, fixes, and the road to Aberration.",
+    "title": "Aberration Bound"
+  },
+  "Sep 2018 build": {
+    "desc": "The last weeks before Extinction. The corrupted Earth was coming.",
+    "title": "Corrupted Dawn"
+  },
+  "Sep 2019 build": {
+    "desc": "Fall 2019 \u2014 Genesis on the horizon.",
+    "title": "Simulation Loading"
+  },
+  "Sep 2020 build": {
+    "desc": "Fall 2020 \u2014 steady updates in the Crystal Isles era.",
+    "title": "Crystal Fall"
+  },
+  "Sep 2021 build": {
+    "desc": "Fall 2021 \u2014 steady updates in the Genesis 2 era.",
+    "title": "Colony Fall"
+  },
+  "Sep 2022 build": {
+    "desc": "Fall 2022 \u2014 Fjordur era, steady fixes.",
+    "title": "Fjordur Fall"
+  },
+  "Sep 2023 build": {
+    "desc": "September 2023 \u2014 ASE's final update era, before official support wound down.",
+    "title": "The Last Patch"
+  },
+  "v252.96 (Dec 2016)": {
+    "desc": "December 2016 build from just before TEK Tier landed. A snapshot of late-2016 ARK, right around the PS4 launch.",
+    "title": "TEK Eve"
+  }
+}
