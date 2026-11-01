@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
 
 # ------------------------------------------------------------------ config
 APP_NAME = "Legacy ARK Launcher"
-VERSION = "v1.61.0"
+VERSION = "v1.62.0"
 # v1.54.0: top-bar Discord button, wired at the user's order Nov 1, 2026.
 # This invite supersedes the v1.46 placeholder (no link) for this button only.
 # Community Servers tab, Sponsored servers, and the pirate Watch link are
@@ -622,107 +622,34 @@ def _first_run_steam_detect():
 # globals + rebuilds QSS; Python-side QColor(BG) etc. pick up the new
 # values live because they're read at paint time, not import time.
 THEMES = {
-    # v1.38.0 Config Editor theme: visual style inspired by
-    # configeditor/config-editor (MIT, https://codeberg.org/configeditor/config-editor),
-    # translated to widget QSS for ARK — no Apex code, settings, presets,
-    # previews, or assets copied, and Gilmer font NOT bundled (Segoe UI
-    # fallback used, as in his LivePreview). Colors are his exact QML
-    # palette: BG #0b0d14, card #161b25, blue accent #3d88c4 / #3579b1,
-    # secondary #171c26, muted #9aa3b2, amber #e0b050, error #e5484d.
-    "configeditor": {"name": "Config Editor", "BG": "#0b0d14", "SIDEBAR": "#0c0f16",
-              "CARD": "#161b25", "CARD_HOVER": "#1e2330", "INPUT_BG": "#0f1219",
-              "BORDER": "#1e2430", "HAIR": "#232a37", "TEXT": "#ffffff",
-              "MUTED": "#9aa3b2", "ACCENT": "#3d88c4", "ACCENT_HOVER": "#4a96d4",
-              "ACCENT_DARK": "#3579b1", "GOLD": "#e0b050", "ON_ACCENT": "#ffffff", "GLASS": "#26FFFFFF", "GLASS_HOVER": "#40FFFFFF", "GLASS_BORDER": "#59FFFFFF"},
-    # v1.50.0 ARK Gems: the ARK logo's three obelisk gems — green, blue, red.
-    # Dark background so the gems pop. See Primary gradient below: with
-    # ACCENT_DARK=green, ACCENT=blue, ACCENT_HOVER=red, Primary buttons
-    # gradient green -> blue -> red, left to right, exactly like the logo.
-    "arkgems": {"name": "ARK Gems (green · blue · red)", "BG": "#0b0d14", "SIDEBAR": "#0c0f16",
-              "CARD": "#161b25", "CARD_HOVER": "#1e2330", "INPUT_BG": "#0f1219",
-              "BORDER": "#1e2430", "HAIR": "#232a37", "TEXT": "#ffffff",
-              "MUTED": "#9aa3b2", "ACCENT": "#2196F3", "ACCENT_HOVER": "#E53935",
-              "ACCENT_DARK": "#4CAF50", "GOLD": "#E0B050", "ON_ACCENT": "#ffffff", "GLASS": "#26FFFFFF", "GLASS_HOVER": "#40FFFFFF", "GLASS_BORDER": "#59FFFFFF"},
-    # Main theme (v1.30.0): Studio — Apple/Meta-style professional dark.
-    # Quieter than Granite: deeper background, softer cards, subtle
-    # borders, one calm orange accent used only for primary actions.
-    "studio": {"name": "Studio", "BG": "#1B1B1F", "SIDEBAR": "#141518",
-              "CARD": "#26272C", "CARD_HOVER": "#2E2F35", "INPUT_BG": "#222327",
-              "BORDER": "#35363C", "HAIR": "#35363C", "TEXT": "#F5F5F7",
-              "MUTED": "#9E9EA6", "ACCENT": "#FF7A1A", "ACCENT_HOVER": "#FF8F3D",
-              "ACCENT_DARK": "#E66A00", "GOLD": "#FF9F0A", "ON_ACCENT": "#1A1206", "GLASS": "#26FFFFFF", "GLASS_HOVER": "#40FFFFFF", "GLASS_BORDER": "#59FFFFFF"},
-    # Main theme (v1.28.1): granite grey + orange. The white ARK Light
-    # theme was way too bright, so the default is now a mid-dark
-    # granite grey — dark enough to kill the glare, light enough to
-    # still read as grey rather than black, with the logo's orange
-    # as the accent.
-    "granite": {"name": "Granite Grey", "BG": "#3B3C41", "SIDEBAR": "#33343A",
-              "CARD": "#46474E", "CARD_HOVER": "#4F5058", "INPUT_BG": "#3E3F45",
-              "BORDER": "#5C5D66", "HAIR": "#5A3D1E", "TEXT": "#F0EFEA",
-              "MUTED": "#A9A9B0", "ACCENT": "#FF7A00", "ACCENT_HOVER": "#FF8F26",
-              "ACCENT_DARK": "#E66A00", "GOLD": "#FF8800", "ON_ACCENT": "#1A1206", "GLASS": "#26FFFFFF", "GLASS_HOVER": "#40FFFFFF", "GLASS_BORDER": "#59FFFFFF"},
-    # Main theme (v1.28.0): white + silver + orange, like the logo
-    # (metallic silver "A" with an orange glow). White background,
-    # white cards on a light-silver sidebar, near-black text, and the
-    # logo's orange as the accent for buttons, borders and highlights.
-    "arklight": {"name": "ARK Light", "BG": "#F2F2F3", "SIDEBAR": "#E8E8EA",
-              "CARD": "#FFFFFF", "CARD_HOVER": "#FFF7ED", "INPUT_BG": "#FFFFFF",
-              "BORDER": "#D9D9DE", "HAIR": "#F5C99B", "TEXT": "#1A1A1E",
-              "MUTED": "#6B6B73", "ACCENT": "#FF7A00", "ACCENT_HOVER": "#FF8F26",
-              "ACCENT_DARK": "#E66A00", "GOLD": "#FF8800", "ON_ACCENT": "#1A1206", "GLASS": "#1A000000", "GLASS_HOVER": "#26000000", "GLASS_BORDER": "#40000000"},
+    # v1.62.0: ONLY Ember + Custom are available, at user order
+    # Nov 1 01:19 ("make only ember and customs themes aviable
+    # get rid of rest"). Removed themes, deleted from this dict
+    # (not just hidden from the dropdown, so no code path can
+    # select them again): Config Editor, ARK Gems, Studio, Granite
+    # Grey, ARK Light, Ocean, Forest, Crimson, Violet, Arctic,
+    # Toxic, Sunset. Custom is NOT in this dict — it is built
+    # from Ember in _theme_dict() with the user-picked accent
+    # (Settings > Pick color...), so Custom always works even
+    # though it has no fixed entry here.
     "ember": {"name": "Ember", "BG": "#0E0E10", "SIDEBAR": "#121214",
               "CARD": "#1A1B1E", "CARD_HOVER": "#232326", "INPUT_BG": "#16171A",
               "BORDER": "#2A2A2E", "HAIR": "#3A2E1A", "TEXT": "#F2EFE9",
               "MUTED": "#9A958C", "ACCENT": "#FF8800", "ACCENT_HOVER": "#FFA033",
               "ACCENT_DARK": "#E67A00", "GOLD": "#F0A02E", "ON_ACCENT": "#1A1206", "GLASS": "#26FFFFFF", "GLASS_HOVER": "#40FFFFFF", "GLASS_BORDER": "#59FFFFFF"},
-    "ocean": {"name": "Ocean", "BG": "#0A0E13", "SIDEBAR": "#0D1219",
-              "CARD": "#121A24", "CARD_HOVER": "#182635", "INPUT_BG": "#0F1620",
-              "BORDER": "#1E2A3A", "HAIR": "#1E3A4A", "TEXT": "#EAF2F8",
-              "MUTED": "#8CA3B8", "ACCENT": "#2E9BF0", "ACCENT_HOVER": "#5CB3F5",
-              "ACCENT_DARK": "#1E7BC8", "GOLD": "#F0C02E", "ON_ACCENT": "#FFFFFF", "GLASS": "#26FFFFFF", "GLASS_HOVER": "#40FFFFFF", "GLASS_BORDER": "#59FFFFFF"},
-    "forest": {"name": "Forest", "BG": "#0C100C", "SIDEBAR": "#0F140F",
-              "CARD": "#141B14", "CARD_HOVER": "#1C261C", "INPUT_BG": "#101610",
-              "BORDER": "#223022", "HAIR": "#2E4A2E", "TEXT": "#EFF5EC",
-              "MUTED": "#93A88F", "ACCENT": "#4CAF50", "ACCENT_HOVER": "#6FCF73",
-              "ACCENT_DARK": "#3D8B40", "GOLD": "#D4A72E", "ON_ACCENT": "#0A140A", "GLASS": "#26FFFFFF", "GLASS_HOVER": "#40FFFFFF", "GLASS_BORDER": "#59FFFFFF"},
-    "crimson": {"name": "Crimson", "BG": "#100C0C", "SIDEBAR": "#140F0F",
-              "CARD": "#1B1414", "CARD_HOVER": "#261C1C", "INPUT_BG": "#161010",
-              "BORDER": "#302222", "HAIR": "#4A2E2E", "TEXT": "#F8ECEC",
-              "MUTED": "#B89898", "ACCENT": "#E5484D", "ACCENT_HOVER": "#F06065",
-              "ACCENT_DARK": "#C03035", "GOLD": "#F0A02E", "ON_ACCENT": "#FFFFFF", "GLASS": "#26FFFFFF", "GLASS_HOVER": "#40FFFFFF", "GLASS_BORDER": "#59FFFFFF"},
-    "violet": {"name": "Violet", "BG": "#0E0C12", "SIDEBAR": "#120F16",
-              "CARD": "#181420", "CARD_HOVER": "#221B2E", "INPUT_BG": "#141020",
-              "BORDER": "#2A2438", "HAIR": "#3E2E4A", "TEXT": "#F2ECF8",
-              "MUTED": "#A898B8", "ACCENT": "#9B5CF0", "ACCENT_HOVER": "#B57FF5",
-              "ACCENT_DARK": "#7D45C8", "GOLD": "#F0C02E", "ON_ACCENT": "#FFFFFF", "GLASS": "#26FFFFFF", "GLASS_HOVER": "#40FFFFFF", "GLASS_BORDER": "#59FFFFFF"},
-    "arctic": {"name": "Arctic", "BG": "#0A0E14", "SIDEBAR": "#0D131C",
-              "CARD": "#111927", "CARD_HOVER": "#182437", "INPUT_BG": "#0E1520",
-              "BORDER": "#1E2C42", "HAIR": "#1E3A4A", "TEXT": "#EAF4FF",
-              "MUTED": "#8CA8C8", "ACCENT": "#5CC8F5", "ACCENT_HOVER": "#7FD8F7",
-              "ACCENT_DARK": "#3AA8D8", "GOLD": "#F0C02E", "ON_ACCENT": "#0A1418", "GLASS": "#26FFFFFF", "GLASS_HOVER": "#40FFFFFF", "GLASS_BORDER": "#59FFFFFF"},
-    "toxic": {"name": "Toxic", "BG": "#0B0F0A", "SIDEBAR": "#0E130C",
-              "CARD": "#131B12", "CARD_HOVER": "#1B2818", "INPUT_BG": "#0F150E",
-              "BORDER": "#22301E", "HAIR": "#2E4A22", "TEXT": "#EFFFEA",
-              "MUTED": "#93B88F", "ACCENT": "#6EE86E", "ACCENT_HOVER": "#8FF08F",
-              "ACCENT_DARK": "#4CC84C", "GOLD": "#D4F02E", "ON_ACCENT": "#0A140A", "GLASS": "#26FFFFFF", "GLASS_HOVER": "#40FFFFFF", "GLASS_BORDER": "#59FFFFFF"},
-    "sunset": {"name": "Sunset", "BG": "#100C10", "SIDEBAR": "#140F14",
-              "CARD": "#1B141C", "CARD_HOVER": "#261C28", "INPUT_BG": "#161016",
-              "BORDER": "#302230", "HAIR": "#4A2E3E", "TEXT": "#F8ECF4",
-              "MUTED": "#B898A8", "ACCENT": "#F05C9B", "ACCENT_HOVER": "#F57FB0",
-              "ACCENT_DARK": "#C8457D", "GOLD": "#F0A02E", "ON_ACCENT": "#1A1206", "GLASS": "#26FFFFFF", "GLASS_HOVER": "#40FFFFFF", "GLASS_BORDER": "#59FFFFFF"},
 }
 
 # Live color globals — apply_theme() reassigns these; paint code reads
 # them at paint time so themes switch without a restart.
-BG = THEMES["studio"]["BG"]; CARD = THEMES["studio"]["CARD"]
-CARD_HOVER = THEMES["studio"]["CARD_HOVER"]; INPUT_BG = THEMES["studio"]["INPUT_BG"]
-ACCENT_DARK = THEMES["studio"]["ACCENT_DARK"]
-BORDER = THEMES["studio"]["BORDER"]; HAIR = THEMES["studio"]["HAIR"]
-TEXT = THEMES["studio"]["TEXT"]; MUTED = THEMES["studio"]["MUTED"]
-FAINT = "#6B675F"; GOLD = THEMES["studio"]["GOLD"]
-ACCENT = THEMES["studio"]["ACCENT"]; ACCENT_HOVER = THEMES["studio"]["ACCENT_HOVER"]
+BG = THEMES["ember"]["BG"]; CARD = THEMES["ember"]["CARD"]
+CARD_HOVER = THEMES["ember"]["CARD_HOVER"]; INPUT_BG = THEMES["ember"]["INPUT_BG"]
+ACCENT_DARK = THEMES["ember"]["ACCENT_DARK"]
+BORDER = THEMES["ember"]["BORDER"]; HAIR = THEMES["ember"]["HAIR"]
+TEXT = THEMES["ember"]["TEXT"]; MUTED = THEMES["ember"]["MUTED"]
+FAINT = "#6B675F"; GOLD = THEMES["ember"]["GOLD"]
+ACCENT = THEMES["ember"]["ACCENT"]; ACCENT_HOVER = THEMES["ember"]["ACCENT_HOVER"]
 BTN_TEXT = "#1A1206"; TEAL = "#2EC4B6"; SUCCESS = "#4cbf5a"
-WARNING = "#e0b050"; DANGER = "#E5484D"; SIDEBAR = THEMES["studio"]["SIDEBAR"]
+WARNING = "#e0b050"; DANGER = "#E5484D"; SIDEBAR = THEMES["ember"]["SIDEBAR"]
 QSS = ""
 
 def _on_accent_text(hexcol):
@@ -738,7 +665,7 @@ def _on_accent_text(hexcol):
 
 def _theme_dict(name, store=None):
     if name == "custom" and store is not None:
-        base = dict(THEMES["studio"])
+        base = dict(THEMES["ember"])
         custom_accent = (store.get("custom_accent", "") or "").strip()
         if custom_accent:
             base["ACCENT"] = custom_accent
@@ -746,7 +673,7 @@ def _theme_dict(name, store=None):
             base["ON_ACCENT"] = _on_accent_text(custom_accent)
             base["name"] = "Custom"
         return base
-    return THEMES.get(name, THEMES["studio"])
+    return THEMES.get(name, THEMES["ember"])
 
 def build_qss(t):
     q = _QSS
@@ -1073,7 +1000,7 @@ QScrollBar::handle:horizontal { background: rgba(255,255,255,77); border-radius:
 QPushButton#Nav:checked { background: rgba(255,255,255,10); color: #ffffff; border: none; }
 QPushButton#Nav:hover { background: rgba(255,255,255,10); color: #cdcdcd; border: none; }
 """
-apply_theme("studio")  # initial; main() re-applies the saved theme
+apply_theme("ember")  # initial; main() re-applies the saved theme
 
 # ------------------------------------------------------------------- icons
 _ICON_CACHE = {}
@@ -2390,11 +2317,17 @@ class SettingsPage(QWidget):
         # ---- theme ----
         theme_lay = FlowLayout(); theme_lay.setContentsMargins(0, 0, 0, 0); theme_lay.setSpacing(8)
         self.theme_combo = QComboBox()
+        # v1.62: only Ember + Custom, always — Custom is available even
+        # if no custom accent has been picked yet (Pick color... below
+        # creates it). Old saved themes are migrated to Ember in main(),
+        # and if one somehow slips through here, it falls back to Ember
+        # instead of showing a blank selection.
         for key, t in THEMES.items():
             self.theme_combo.addItem(t["name"], key)
-        if (self.store.get("custom_accent", "") or "").strip():
-            self.theme_combo.addItem("Custom", "custom")
-        cur = self.store.get("theme", "studio")
+        self.theme_combo.addItem("Custom", "custom")
+        cur = self.store.get("theme", "ember")
+        if cur not in ("ember", "custom"):
+            cur = "ember"; self.store.set("theme", cur)
         idx = self.theme_combo.findData(cur)
         if idx >= 0: self.theme_combo.setCurrentIndex(idx)
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
@@ -2720,7 +2653,7 @@ class SettingsPage(QWidget):
             pass
 
     def _on_theme_changed(self):
-        key = self.theme_combo.currentData() or "studio"
+        key = self.theme_combo.currentData() or "ember"
         self.store.set("theme", key)
         apply_theme(key, self.store)
         self.main.setStyleSheet(QSS)
@@ -8093,7 +8026,13 @@ def main():
         store.set("background_opacity", 1.0); store.set("background_migrated_v1400", True)
     if not store.get("configeditor_migrated_v1380"):
         store.set("theme", "configeditor"); store.set("configeditor_migrated_v1380", True)
-    apply_theme(store.get("theme", "studio"), store)
+    # v1.62.0 theme restriction: only Ember + Custom. Any saved theme
+    # that is not one of those (including the Studio/Config Editor
+    # defaults set by the migrations above) is switched once to Ember,
+    # so the app never tries to load a deleted theme. Custom is kept.
+    if store.get("theme") not in ("ember", "custom"):
+        store.set("theme", "ember")
+    apply_theme(store.get("theme", "ember"), store)
     _set_palette()
     # No splash screen (v1.28.3): the old QSplashScreen was the small
     # flashing "LEGACY ARK" window on launch. MainWindow builds its
