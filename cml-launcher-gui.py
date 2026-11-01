@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
 
 # ------------------------------------------------------------------ config
 APP_NAME = "Legacy ARK Launcher"
-VERSION = "v1.60.0"
+VERSION = "v1.61.0"
 # v1.54.0: top-bar Discord button, wired at the user's order Nov 1, 2026.
 # This invite supersedes the v1.46 placeholder (no link) for this button only.
 # Community Servers tab, Sponsored servers, and the pirate Watch link are
@@ -2545,7 +2545,7 @@ class SettingsPage(QWidget):
         else:
             self.discord_t.setEnabled(True)
             if self.store.get("discord_rich_presence"):
-                self.discord_hint.setText("On — your Discord status shows Legacy ARK Launcher while the launcher is open. Hit Test to prove it works.")
+                self.discord_hint.setText("On — your Discord status should now show Legacy ARK Launcher / Browsing builds while the launcher is open. If your profile still shows nothing, check Discord > Settings > Activity Privacy > Display current activity = ON, and that Discord desktop is open as the same account you are checking.")
             else:
                 self.discord_hint.setText("Off.")
     def _on_discord_toggled(self, on):
@@ -2574,9 +2574,23 @@ class SettingsPage(QWidget):
             return
         ok, reason = discord_set_playing(cid, "test build")
         if ok:
-            QMessageBox.information(self, APP_NAME, "Rich Presence works — check your Discord profile, it should show Legacy ARK Launcher.\n\nClearing the test in 3 seconds...")
-            QTimer.singleShot(3000, discord_clear)
+            try:
+                import datetime as _dt
+                _now = _dt.datetime.now().strftime("%H:%M")
+                self.discord_hint.setText(f"Test worked at {_now} — check your Discord profile NOW, test presence stays 15 seconds. Turn the Rich Presence toggle ON above to keep it as Browsing builds permanently. If your profile still shows nothing, check Discord > Settings > Activity Privacy > Display current activity as a status message = ON.")
+            except Exception: pass
+            QMessageBox.information(self, APP_NAME, "Rich Presence works — check your Discord profile NOW, it should show Legacy ARK Launcher / Playing ARK test build.\n\nTest presence stays 15 seconds (was 3 seconds before, which is why you missed it).\n\nAfter 15 seconds, if the Rich Presence toggle above is ON, it will switch to Browsing builds and stay. If the toggle is OFF, it will clear and your profile will go empty again — turn the toggle ON to keep presence.\n\nAlso check: Discord > Settings > Activity Privacy > Display current activity as a status message must be ON, or even a working presence will not show on your profile.")
+            def _after_test():
+                try:
+                    if self.store.get("discord_rich_presence"):
+                        discord_set_idle(self.store.get("discord_client_id", ""))
+                    else:
+                        discord_clear()
+                except Exception: pass
+            QTimer.singleShot(15000, _after_test)
         else:
+            try: self.discord_hint.setText(f"Test failed: {reason}")
+            except Exception: pass
             QMessageBox.warning(self, APP_NAME, f"Couldn't connect to Discord.\n\n{reason}")
 
     def _path_control(self, line_edit, key):
