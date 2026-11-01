@@ -17,7 +17,7 @@ Pick a build, download it, and play it. It also handles Workshop mods, hosting a
 ## Requirements
 
 - Windows 10/11
-- Python 3.11+ and PyQt6 — **or** the built `.exe` (see below, no Python needed)
+- Python 3.11+ and PyQt6 + pypresence (pypresence is only for Discord Rich Presence, the launcher still runs without it) — **or** the built `.exe` (see below, no Python needed)
 - A Steam account that owns ARK: Survival Evolved
 - Tens of GB free disk space per build (old ARK builds are large)
 
@@ -26,7 +26,7 @@ Pick a build, download it, and play it. It also handles Workshop mods, hosting a
 1. Download / clone this repo.
 2. Install PyQt6:
    ```
-   python -m pip install PyQt6
+   python -m pip install PyQt6 pypresence
    ```
 3. Double-click `start-launcher.vbs` (no console window), or `start-launcher.bat` (checks PyQt6 first, brief console window).
    - If it ever crashes silently, run `start-launcher-debug.bat` instead — it keeps the console open — or check `launcher-error.log` next to the `.py`.
@@ -39,7 +39,7 @@ On first run:
 ## Build the .exe (Windows only)
 
 On a Windows PC, in the repo folder, double-click `build-exe.bat`.
-It installs PyInstaller + PyQt6, then builds a single-file exe:
+It installs PyInstaller + PyQt6 + pypresence, then builds a single-file exe:
 
 ```
 dist\LegacyARK-Launcher.exe
@@ -75,7 +75,7 @@ You can edit `mods.json` — the launcher reads it on startup, no recompile need
 
 `art/*.jpg` are ARK's real Steam store headers (460×215), fetched from Steam's CDN, and `art/ark-background.png` is the default background image. **These are Wildcard's artwork, not covered by the MIT license in this repo.** They are included here for identification in the launcher UI. If `art/` is ever lost, open Tools → “Download official ARK headers” to re-fetch them straight from Steam.
 
-The top-bar JOIN DISCORD button opens the community Discord invite in your browser. It is just a text link button, no logo — it does not show Discord Rich Presence status in the launcher.
+The top-bar JOIN DISCORD button opens the community Discord invite in your browser. It is just a text link button, no logo — it does not show your Discord status by itself. Discord Rich Presence is separate, in Settings > Discord: turn it on, paste your Discord Application ID (pre-filled with the old app ID), hit Test, and your status will show Legacy ARK Launcher + the build you are playing. It needs the Discord desktop app open on your PC.
 
 ## Files in this repo
 
@@ -89,6 +89,10 @@ The top-bar JOIN DISCORD button opens the community Discord invite in your brows
 - `start-launcher.bat` / `start-launcher.vbs` / `start-launcher-debug.bat` — run from source
 
 Not in this repo, on purpose: your settings (`~/.cml-launcher/settings.json`), SteamCMD, downloaded builds, backups, and logs. See `.gitignore`.
+
+## Discord Rich Presence
+
+Settings > Discord: turn Rich Presence on, check your Discord Application ID, hit Test. Test shows the exact failure reason if it cannot connect — pypresence not installed, Discord desktop not running, or Client ID wrong — instead of silently doing nothing. While the launcher is open it shows “Browsing builds”, while a game is playing it shows “Playing ARK <build>”. The JOIN DISCORD button is separate, it is only a link to join the community.
 
 ## License
 
