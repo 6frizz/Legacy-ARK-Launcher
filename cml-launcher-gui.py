@@ -35,9 +35,33 @@ from PyQt6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
                              QSlider, QSplashScreen,
                              QStackedWidget, QVBoxLayout, QWidget, QProgressBar, QSizePolicy)
 
+# v1.72.0: TEK Launcher engine-room port (sibling modules, imported
+# guarded so a missing/corrupt module can never stop the launcher -
+# the features that use them simply switch off).
+try:
+    import tek_lib
+except Exception:
+    tek_lib = None
+try:
+    import tek_steamclient
+except Exception:
+    tek_steamclient = None
+
 # ------------------------------------------------------------------ config
 APP_NAME = "Legacy ARK Launcher"
-VERSION = "v1.71.3"
+VERSION = "v1.72.0"
+# v1.72.0: TEK Launcher (C#) engine room ported to Python - new
+# tek_lib.py (VDF/KeyValues parser, Steam library detection via
+# libraryfolders.vdf + appmanifest_*.acf, A2S_PLAYER, TEK's DLC table)
+# and tek_steamclient.py (ctypes bindings for libtek-steamclient-2.dll,
+# TEK's native Steam CM client; anonymous sign-in only, DLL downloaded
+# on first use from TEK's mirrors, never bundled). Wired in: Servers
+# cards show ping and a Players button lists who's online (A2S_PLAYER
+# via tek_lib); Settings > Steam reports the Steam-library ARK
+# detection; Mods 'Check (TEK CM)' verifies a Workshop ID through the
+# CM client instead of the Web API. NOT ported: libtek-injector /
+# libtek-game-runtime (process injection + Steamworks emulation) -
+# game launching is exactly as before. See THIRD-PARTY-NOTICES.md.
 # v1.71.2: usage-ping retry fix — v1.71.1 marked the day BEFORE sending,
 # so a silently failed ping burned the whole day and the counter stayed
 # empty with no error (his case: his PC reaches the counter fine, the
@@ -1441,6 +1465,40 @@ def game_exe_for(steam_dir, version, store=None):
         Path(steam_dir) / "steamapps" / "common" / "CML-ARK")
     return base / slugify(version.get("name", "")) / "ShooterGame" / "Binaries" / "Win64" / "ShooterGame.exe"
 
+_TEK_ARK_CACHE = {}
+
+def _tek_ark_detection(steam_dir):
+    """v1.72.0: one-line summary of tek_lib's Steam-library detection
+    (TEK Steam/App.cs port): is the *Steam* install of current ARK
+    present, where, and with which DLC depots. Cached per Steam path -
+    it reads libraryfolders.vdf + appmanifest_346110.acf. Returns ""
+    when tek_lib is unavailable. Never raises."""
+    if tek_lib is None:
+        return ""
+    key = steam_dir or ""
+    if key in _TEK_ARK_CACHE:
+        return _TEK_ARK_CACHE[key]
+    txt = ""
+    try:
+        det = tek_lib.detect_ark_install(steam_dir or None)
+        inst = det.get("install")
+        libs = det.get("libraries") or []
+        if inst is None:
+            txt = ("Steam library check: no Steam-installed ARK found — that's fine, "
+                   "your old builds live in the CML-ARK folder, not in Steam's library.")
+        else:
+            n_dlc = len(det.get("dlc_depots") or {})
+            txt = (f"Steam library check: current ARK is installed at {inst.install_path} "
+                   f"(build {inst.manifest.build_id or '?'}, {n_dlc} DLC depot"
+                   f"{'s' if n_dlc != 1 else ''} detected). "
+                   f"Your old builds still live in the CML-ARK folder.")
+        if len(libs) > 1:
+            txt += f" {len(libs)} Steam libraries found."
+    except Exception:
+        txt = ""
+    _TEK_ARK_CACHE[key] = txt
+    return txt
+
 def _desktop_path():
     """User's Desktop folder (handles redirected folders)."""
     try:
@@ -1495,6 +1553,9 @@ STEAMCMD_URL = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip"
 # version upgrades (every new zip extracts to a fresh folder, which used
 # to make the setup dialog pop up again every single version).
 STEAMCMD_DIR = DATA_DIR / "steamcmd"
+# v1.72.0: libtek-steamclient-2.dll lives here (downloaded on first
+# TEK CM use by tek_steamclient.ensure_dll - never bundled).
+TEK_DLL_DIR = DATA_DIR / "tek-steamclient"
 STEAMCMD_EXE = STEAMCMD_DIR / "steamcmd.exe"
 
 def _migrate_steamcmd():
@@ -2393,6 +2454,8 @@ class SettingsPage(QWidget):
         v.addWidget(self._row("Steam Folder", "Where Steam itself is installed on your PC (the folder with steam.exe in it). Leave it blank and the launcher finds Steam by itself. Only fill this in if the launcher cannot find Steam on its own.", self._path_control(self.steam_input, "steam_path")))
         self.steam_resolved = QLabel(""); self.steam_resolved.setObjectName("Muted"); self.steam_resolved.setWordWrap(True)
         v.addWidget(self.steam_resolved)
+        self.steam_library_label = QLabel(""); self.steam_library_label.setObjectName("Muted"); self.steam_library_label.setWordWrap(True)
+        v.addWidget(self.steam_library_label)
 
         self.install_input = QLineEdit(); self.install_input.setPlaceholderText("Leave blank for Steam's CML-ARK folder")
         self.install_input.setText(self.store.get("install_dir", ""))
@@ -2822,6 +2885,10 @@ class SettingsPage(QWidget):
         steam = steam_dir_for(self.store)
         self.steam_resolved.setText(f"Using: {steam}" if steam else "Steam not found — install Steam and log in.")
         self.install_resolved.setText(f"Builds install to: {install_root_for(self.store, steam)}")
+        try:
+            self.steam_library_label.setText(_tek_ark_detection(steam))
+        except Exception:
+            pass
 
     def _sync_steamcmd_label(self):
         self.steamcmd_status.setText("SteamCMD ready." if steamcmd_ready() else "Not set up yet — hit Set up SteamCMD to download it.")
@@ -6370,6 +6437,8 @@ class ModsPage(QWidget):
         self.ws_id_e = QLineEdit(); self.ws_id_e.setPlaceholderText("Workshop ID, e.g. 123456789"); wrow.addWidget(self.ws_id_e, 1)
         ws_b = QPushButton("Install by ID"); ws_b.setObjectName("Primary"); ws_b.clicked.connect(self._on_install_by_id); wrow.addWidget(ws_b)
         chk_b = QPushButton("Check"); chk_b.clicked.connect(self._on_check_by_id); wrow.addWidget(chk_b)
+        tek_chk_b = QPushButton("Check (TEK CM)"); tek_chk_b.setToolTip("Verify via TEK's Steam CM client instead of the Web API (first use downloads TEK's client DLL)")
+        tek_chk_b.clicked.connect(self._on_check_by_id_tek); wrow.addWidget(tek_chk_b)
         wrow.addStretch(1); wv.addLayout(wrow)
         # v1.67.0: preview image for the checked mod (TEK's preview pane).
         self.ws_preview = QLabel(); self.ws_preview.setFixedSize(128, 128); self.ws_preview.setVisible(False)
@@ -6380,7 +6449,7 @@ class ModsPage(QWidget):
         # Steam's public Workshop listing pages + the existing SteamCMD
         # install worker). Best effort — if Steam's markup doesn't parse,
         # Open in browser still gets you there.
-        self._ws_page = 1; self._ws_query = ""; self._ws_thread = None; self._ws_check_thread = None
+        self._ws_page = 1; self._ws_query = ""; self._ws_thread = None; self._ws_check_thread = None; self._tek_check_thread = None
         br = QFrame(); br.setObjectName("Card")
         bv = QVBoxLayout(br); bv.setContentsMargins(16, 12, 16, 12); bv.setSpacing(8)
         bt = QLabel("Browse the Workshop"); bt.setObjectName("RowTitle"); bv.addWidget(bt)
@@ -6676,6 +6745,34 @@ class ModsPage(QWidget):
                 self.status_label.setText(f"Not an ARK mod (it's for app {res.get('app_id')}) — don't install it into ARK.")
         except Exception:
             self.status_label.setText("Couldn't verify that ID.")
+
+    def _on_check_by_id_tek(self):
+        """v1.72.0: same ID check as 'Check', but through TEK's CM
+        client (tek_steamclient) instead of the public Web API. The
+        result lands in the same handler, prefixed so the user can
+        tell which path answered."""
+        if self._tek_check_thread is not None and self._tek_check_thread.isRunning():
+            return
+        wid = (self.ws_id_e.text() or "").strip()
+        if not wid.isdigit() or not is_valid_workshop_id(wid):
+            QMessageBox.warning(self, APP_NAME, "Enter a valid Workshop ID (digits only).")
+            return
+        self.status_label.setText(f"Checking Workshop mod {wid} via TEK CM (first use downloads TEK's client DLL)…")
+        self._tek_check_thread = _TekCmCheckThread(wid)
+        self._tek_check_thread.done.connect(self._on_checked_by_id_tek)
+        self._tek_check_thread.start()
+
+    def _on_checked_by_id_tek(self, res):
+        self._tek_check_thread = None
+        self._on_checked_by_id(res)
+        try:
+            cur = self.status_label.text()
+            if res.get("error"):
+                self.status_label.setText(f"TEK CM check failed: {res['error']} — the normal Check button uses the Web API instead.")
+            elif cur:
+                self.status_label.setText(f"[via TEK CM] {cur}")
+        except Exception:
+            pass
 
     def _on_check_mod_updates(self):
         """v1.67.0: check installed mods in the target build for newer
@@ -8100,13 +8197,80 @@ class _ServerQueryThread(QThread):
         try:
             for i, srv in enumerate(self.servers):
                 try:
+                    _t0 = time.perf_counter()
                     info = _a2s_query(srv.get("ip", ""), int(srv.get("query_port", 27015)))
+                    if info is not None:
+                        # v1.72.0: ping for the card (round-trip of the
+                        # INFO query itself - no extra traffic).
+                        info["ping_ms"] = (time.perf_counter() - _t0) * 1000.0
                     rules = _a2s_query_rules(srv.get("ip", ""), int(srv.get("query_port", 27015))) if info else None
                     out[i] = (info, rules)
                 except Exception:
                     out[i] = (None, None)
         except Exception:
             pass
+        self.done.emit(out)
+
+class _ServerPlayersThread(QThread):
+    """v1.72.0: A2S_PLAYER via tek_lib (the TEK port's query_server) -
+    who's on one server right now. Emits a tek_lib.ServerStatus, or
+    None when tek_lib is missing or the query blew up."""
+    done = pyqtSignal(object)
+
+    def __init__(self, srv):
+        super().__init__(); self.srv = srv
+
+    def run(self):
+        try:
+            if tek_lib is None:
+                self.done.emit(None); return
+            status = tek_lib.query_server(self.srv.get("ip", ""),
+                                          int(self.srv.get("query_port", 27015)),
+                                          timeout=3.0, with_players=True)
+            self.done.emit(status)
+        except Exception:
+            self.done.emit(None)
+
+class _TekCmCheckThread(QThread):
+    """v1.72.0: Workshop ID lookup through TEK's CM client
+    (tek_steamclient): anonymous CM sign-in - no Web API, and no
+    credentials anywhere (the bindings declare no password API).
+    First use downloads libtek-steamclient-2.dll from TEK's official
+    mirrors into TEK_DLL_DIR. Emits the _ModCheckThread dict shape
+    plus a 'via' marker."""
+    done = pyqtSignal(dict)
+
+    def __init__(self, wid):
+        super().__init__(); self.wid = str(wid)
+
+    def run(self):
+        out = {"wid": self.wid, "found": False, "title": "", "app_id": None,
+               "error": "", "preview": None, "via": "TEK CM"}
+        try:
+            if tek_steamclient is None:
+                out["error"] = "tek_steamclient module missing"
+                self.done.emit(out); return
+            details = tek_steamclient.workshop_details(
+                [int(self.wid)], TEK_DLL_DIR, timeout_ms=15000)
+            if not details:
+                out["error"] = "TEK CM returned nothing (connect/sign-in failed)"
+                self.done.emit(out); return
+            d = details[0]
+            if d.status == 1 or d.name:
+                out["found"] = True
+                out["title"] = d.name or ""
+                out["app_id"] = int(d.app_id) if d.app_id else None
+                if d.preview_url:
+                    try:
+                        preq = urllib.request.Request(d.preview_url, headers={"User-Agent": "Mozilla/5.0"})
+                        with urllib.request.urlopen(preq, timeout=10) as presp:
+                            out["preview"] = presp.read()
+                    except Exception:
+                        out["preview"] = None
+            else:
+                out["error"] = "not found via TEK CM"
+        except Exception as e:
+            out["error"] = str(e) or "TEK CM check failed"
         self.done.emit(out)
 
 class _LanScanThread(QThread):
@@ -8223,6 +8387,7 @@ class ServersPage(QWidget):
             if rules.get("SESSIONISPVE_i") == "1": info += " • PvE"
             elif rules.get("SESSIONISPVE_i") == "0": info += " • PvP"
             if res.get("version"): info += f" • {res['version']}"
+            if res.get("ping_ms") is not None: info += f" • {res['ping_ms']:.0f} ms"
             info += f" • {addr}"
         t = QLabel(title); t.setObjectName("RowTitle"); v.addWidget(t)
         s = QLabel(info); s.setObjectName("Muted"); s.setWordWrap(True); v.addWidget(s)
@@ -8237,6 +8402,8 @@ class ServersPage(QWidget):
         if (srv.get("discord") or "").strip():
             dc_b = QPushButton("Discord"); dc_b.clicked.connect(lambda _c=False, _u=srv.get("discord").strip(): _open_url(_u)); brow.addWidget(dc_b)
         ref_b = QPushButton("Refresh"); ref_b.clicked.connect(lambda _c=False, _i=i: self._on_refresh_one(_i)); brow.addWidget(ref_b)
+        pl_b = QPushButton("Players"); pl_b.setToolTip("List who's on this server right now (A2S_PLAYER)")
+        pl_b.clicked.connect(lambda _c=False, _s=srv: self._on_players(_s)); brow.addWidget(pl_b)
         cp_b = QPushButton("Copy address"); cp_b.clicked.connect(lambda _c=False, _s=srv: self._on_copy(_s)); brow.addWidget(cp_b)
         fav_b = QPushButton("★ Unfavorite" if srv.get("favorite") else "☆ Favorite"); fav_b.clicked.connect(lambda _c=False, _i=i: self._on_favorite(_i)); brow.addWidget(fav_b)
         rm_b = QPushButton("Remove"); rm_b.clicked.connect(lambda _c=False, _i=i: self._on_remove(_i)); brow.addWidget(rm_b)
@@ -8324,6 +8491,47 @@ class ServersPage(QWidget):
                     if rules is not None: self._rules[i] = rules
         except Exception: pass
         self.refresh()
+
+    def _on_players(self, srv):
+        """v1.72.0: who's online on this server (A2S_PLAYER via
+        tek_lib). Queried on demand in a dialog - servers only publish
+        the player list when asked, and it costs a second query."""
+        if getattr(self, "_players_thread", None) is not None and self._players_thread.isRunning():
+            return
+        dlg = QDialog(self); dlg.setWindowTitle("Players on server")
+        dlg.setMinimumWidth(420)
+        lay = QVBoxLayout(dlg)
+        head = QLabel(f"{srv.get('ip', '')}:{srv.get('query_port', 27015)} — asking the server…")
+        head.setObjectName("Muted"); head.setWordWrap(True); lay.addWidget(head)
+        lst = QListWidget(); lay.addWidget(lst)
+        close_b = QPushButton("Close"); close_b.clicked.connect(dlg.accept); lay.addWidget(close_b)
+        self._players_dlg = dlg; self._players_list = lst; self._players_head = head
+        self._players_thread = _ServerPlayersThread(srv)
+        self._players_thread.done.connect(self._on_players_done)
+        self._players_thread.start()
+        dlg.exec()
+
+    def _on_players_done(self, status):
+        self._players_thread = None
+        try:
+            lst, head = self._players_list, self._players_head
+            lst.clear()
+            if status is None or getattr(status, "info", None) is None:
+                head.setText("The server didn't answer — offline or unreachable.")
+                return
+            info = status.info
+            players = status.players
+            ping = f" • {info.ping_ms:.0f} ms" if getattr(info, "ping_ms", None) is not None else ""
+            if players is None:
+                head.setText(f"{info.name or 'Server'} — answered, but didn't publish a player list{ping}.")
+                return
+            head.setText(f"{info.name or 'Server'} — {len(players)} player(s) online{ping}.")
+            for p in sorted(players, key=lambda x: -x.duration_seconds):
+                lst.addItem(f"{p.name or '(unnamed)'} — {p.duration_str} connected — score {p.score}")
+            if not players:
+                lst.addItem("Server is empty.")
+        except Exception:
+            pass
 
     def _on_join(self, srv):
         try:

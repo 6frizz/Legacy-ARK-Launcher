@@ -29,6 +29,8 @@ python -m PyInstaller --noconfirm --clean ^
   --collect-all PyQt6 ^
   --collect-all pypresence ^
   --hidden-import pypresence ^
+  --hidden-import tek_lib ^
+  --hidden-import tek_steamclient ^
   --add-data "versions.json;." ^
   --add-data "descriptions.json;." ^
   --add-data "mods.json;." ^

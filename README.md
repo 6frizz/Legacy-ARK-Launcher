@@ -80,6 +80,8 @@ The top-bar JOIN DISCORD button opens the community Discord invite in your brows
 ## Files in this repo
 
 - `cml-launcher-gui.py` — the whole launcher (PyQt6)
+- `tek_lib.py` — engine-room systems ported from TEK Launcher (VDF parser, Steam library detection, A2S server queries, ARK data models) — pure stdlib, no Qt
+- `tek_steamclient.py` — ctypes bindings for TEK's native `libtek-steamclient-2.dll` (Steam CM client; the DLL is downloaded on first use, never bundled)
 - `versions.json` — 97 builds, 2015–2024, with Steam depot manifests
 - `descriptions.json` — per-build descriptions
 - `mods.json` — Workshop mod catalog
@@ -87,6 +89,12 @@ The top-bar JOIN DISCORD button opens the community Discord invite in your brows
 - `logo.png` / `logo.ico` — launcher icon
 - `build-exe.bat` / `LegacyARK-Launcher.spec` — PyInstaller exe build
 - `start-launcher.bat` / `start-launcher.vbs` / `start-launcher-debug.bat` — run from source
+- `tests/` — headless unit tests for `tek_lib.py` / `tek_steamclient.py` (`python -m unittest discover -s tests`)
+- `THIRD-PARTY-NOTICES.md` — TEK Launcher attribution (MIT, © 2020 Nuclearist)
+
+## TEK Launcher port (v1.72.0)
+
+Parts of [TEK Launcher](https://github.com/Nuclearistt/TEKLauncher) (© 2020 Nuclearist, MIT) were ported from C# to Python: the VDF/KeyValues parser, Steam library detection (`libraryfolders.vdf` + `appmanifest_*.acf`), the A2S server-query engine (now with ping on server cards and a per-server Players list), TEK's DLC table, and ctypes bindings for TEK's Steam CM client library — used by the Mods tab's "Check (TEK CM)" button with anonymous sign-in only (no credentials are ever involved). TEK's injector and game-runtime components were **not** ported. Full details: `THIRD-PARTY-NOTICES.md`.
 
 Not in this repo, on purpose: your settings (`~/.cml-launcher/settings.json`), SteamCMD, downloaded builds, backups, and logs. See `.gitignore`.
 
