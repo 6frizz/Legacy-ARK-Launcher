@@ -24,7 +24,7 @@ import zipfile
 from pathlib import Path
 from PyQt6.QtCore import Qt, QThread, QTimer, QUrl, QSize, QRect, pyqtSignal, QRectF, QPointF, QPoint, QObject, QEvent
 from PyQt6.QtGui import (QColor, QDesktopServices, QFont,
-                         QIcon, QPalette, QPen, QPainter, QPainterPath, QPixmap, QPolygon, QRegion)
+                         QIcon, QPalette, QPen, QPainter, QPainterPath, QPixmap, QPolygon)
 from PyQt6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
                              QDialog, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
                              QGridLayout, QHBoxLayout, QLabel, QLayout, QWidgetItem, QLineEdit, QListWidget,
@@ -35,16 +35,14 @@ from PyQt6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
 
 # ------------------------------------------------------------------ config
 APP_NAME = "Legacy ARK Launcher"
-VERSION = "v1.71.2"
-# v1.71.2: usage-ping retry fix — v1.71.1 marked the day BEFORE sending,
-# so a silently failed ping burned the whole day and the counter stayed
-# empty with no error (his case: his PC reaches the counter fine, the
-# ping code is correct, yet no hit ever landed). Now the day counts
-# only on success, on a fresh key (old usage_ping_last_day marks are
-# unproven — written before success-tracking — so his first v1.71.2
-# launch retries right away instead of waiting for tomorrow), and a
-# failed ping retries on the next launch or toggle flip. Folds in
-# untested v1.71.1/71/70/69/68.
+VERSION = "v1.69.0"
+# v1.69.0: anonymous usage counting, OFF by default (Settings toggle):
+# at most one ping per day carrying ONLY the launcher version in the
+# path — no username, no game data, nothing identifying. Counts land in
+# the site's Netlify analytics under "Top resources not found" (Web
+# Analytics only counts 200/201/304 HTML as pageviews, but still lists
+# 404'd resources with totals). Also folds in the v1.68.0 depot-folder
+# fix, which was built but never released/tested on its own.
 # v1.64.0: startup window diagnostic removed — no more launcher-windows.log
 # created next to the exe on every launch (leftover from the v1.28.8/v1.28.9
 # flashing-windows hunt; that bug was confirmed fixed in v1.28.13).
@@ -1572,28 +1570,6 @@ def _send_usage_ping(version):
     except Exception:
         return False
 
-PUBLIC_PING_KEY = "legacy-ark-launcher-6frizz-active-users"
-PUBLIC_PING_HIT = "https://countapi.mileshilliard.com/api/v1/hit/" + PUBLIC_PING_KEY
-PUBLIC_PING_GET = "https://countapi.mileshilliard.com/api/v1/get/" + PUBLIC_PING_KEY
-# v1.70.0: public counter (no signup, no key; all keys/values public).
-# The website reads PUBLIC_PING_GET for the live "Active users" total.
-# A first hit creates the key; a get on an unknown key 404s, which just
-# means zero pings have landed yet. Public by design: anyone who knows
-# the key can read the total, and anyone could inflate it — so this is
-# a community counter, not an audited headcount.
-def _send_public_ping():
-    """GET the hit endpoint; True on any HTTP response, False only on
-    a network failure. Sends no data at all — the URL itself is the
-    count, and the count is a running total of daily check-ins."""
-    try:
-        req = urllib.request.Request(PUBLIC_PING_HIT, headers={"User-Agent": "LegacyARKLauncher/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as _resp:
-            return True
-    except urllib.error.HTTPError:
-        return True
-    except Exception:
-        return False
-
 class DownloadWorker(QThread):
     progress = pyqtSignal(str)
     progress_pct = pyqtSignal(int)  # 0-100 determinate progress
@@ -2031,13 +2007,6 @@ class TitleBar(QWidget):
         h = QHBoxLayout(self); h.setContentsMargins(16, 16, 16, 16); h.setSpacing(10); self.h = h
         logo = QLabel(); logo.setPixmap(brand_pixmap(48)); logo.setFixedSize(48, 48); h.addWidget(logo)
         self.brand_text = QLabel(APP_NAME); self.brand_text.setObjectName("Brand"); self.brand_text.setMinimumWidth(0); h.addWidget(self.brand_text)
-        # v1.71.0: Active users, live from the public counter, right
-        # next to the title. Read-only: a plain GET of the public
-        # total, no data sent. MainWindow refreshes it (thread + 60s
-        # timer); failures show a dash, never an error popup.
-        self.active_users_label = QLabel("Active users: —"); self.active_users_label.setObjectName("Muted")
-        self.active_users_label.setToolTip("Live total of daily check-ins from opted-in launchers.")
-        h.addWidget(self.active_users_label)
         h.addSpacing(16)
         self.nav_widget = QWidget(); self.nav_layout = QHBoxLayout(self.nav_widget); self.nav_layout.setContentsMargins(0, 0, 0, 0); self.nav_layout.setSpacing(4); h.addWidget(self.nav_widget)
         h.addStretch(1)
@@ -2555,7 +2524,7 @@ class SettingsPage(QWidget):
         v.addWidget(self.update_status)
 
         v.addWidget(self._header("USAGE COUNTING"))
-        _sg = QLabel("Off by default. When on, the launcher sends one anonymous ping per day containing only the launcher version — no Steam username, no game data, nothing that identifies you. Counts show up in the site's Netlify analytics (per version) and as a public total on the website next to the title. The public total is just a number, and anyone who finds the counter address could inflate it, so treat it as a community counter, not an exact headcount. Turn it off any time and the pings stop."); _sg.setObjectName("Muted"); _sg.setWordWrap(True); v.addWidget(_sg)
+        _sg = QLabel("Off by default. When on, the launcher sends one anonymous ping per day to the project website containing only the launcher version — no Steam username, no game data, nothing that identifies you. The counts show up in the site's Netlify analytics, so the project can see how many people use each version. Turn it off any time and the pings stop."); _sg.setObjectName("Muted"); _sg.setWordWrap(True); v.addWidget(_sg)
         self.usage_ping_cb = QCheckBox("Help count launcher users (anonymous, version only)")
         self.usage_ping_cb.setChecked(bool(self.store.get("usage_ping")))
         def _on_usage_ping(checked):
@@ -3055,7 +3024,7 @@ class HelpPage(QWidget):
         at = QLabel(f"About Legacy ARK Launcher {VERSION}"); at.setObjectName("RowTitle"); av.addWidget(at)
         ad = QLabel("Old ARK builds, 2015 to 2024 — downloaded through your own Steam account, only builds you own. "
                     "Made for the OG Ark community."); ad.setObjectName("Muted"); ad.setWordWrap(True); av.addWidget(ad)
-        au = QLabel("Usage counting is off unless you turn it on in Settings → Usage Counting. When on, the launcher sends one anonymous ping per day with only the launcher version — no username, no game data. Totals show on the website as Active users, and the same total shows in the header."); au.setObjectName("Muted"); au.setWordWrap(True); av.addWidget(au)
+        au = QLabel("Usage counting is off unless you turn it on in Settings → Usage Counting. When on, the launcher sends one anonymous ping per day with only the launcher version — no username, no game data."); au.setObjectName("Muted"); au.setWordWrap(True); av.addWidget(au)
         arow = FlowLayout(); arow.setSpacing(10)
         for _txt, _url in [("Website", "https://legacy-ark-launcher.netlify.app/"), ("Discord", DISCORD_INVITE_URL), ("GitHub", "https://github.com/6frizz/Legacy-ARK-Launcher")]:
             _b = QPushButton(_txt); _b.clicked.connect(lambda _c=False, _u=_url: _open_url(_u)); arow.addWidget(_b)
@@ -8660,53 +8629,6 @@ class GameOptionsPage(QWidget):
         except OSError as e:
             QMessageBox.warning(self, APP_NAME, f"Couldn't write the bloom fix: {e}")
 
-def _fetch_active_users():
-    """v1.71.0: read the public counter total; '—' on any failure
-    (including 404 for a fresh key with no pings yet, bad JSON, or a
-    missing value). Pure read, no data sent."""
-    try:
-        req = urllib.request.Request(PUBLIC_PING_GET, headers={"User-Agent": "LegacyARKLauncher/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8", "replace"))
-        value = data.get("value")
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return "—"
-        return f"{int(value):,}"
-    except Exception:
-        return "—"
-
-class _ActiveUsersThread(QThread):
-    """v1.71.0: fetch the header total off the UI thread; the result
-    signal is what touches the label (Qt queued connection)."""
-    result = pyqtSignal(str)
-    def run(self):
-        try: self.result.emit(_fetch_active_users())
-        except Exception:
-            try: self.result.emit("—")
-            except Exception: pass
-
-class _UsagePingThread(QThread):
-    """v1.71.2: send both usage pings off the UI thread and report
-    whether either one succeeded. Detached (no parent) like the header
-    fetch thread, so closing the window mid-ping can't destroy a
-    running thread; finished -> deleteLater. The done signal is what
-    marks the day (on the UI thread) — no store writes off it."""
-    done = pyqtSignal(bool)
-    def run(self):
-        ok = False
-        try:
-            if _send_usage_ping(VERSION):
-                ok = True
-        except Exception:
-            pass
-        try:
-            if _send_public_ping():
-                ok = True
-        except Exception:
-            pass
-        try: self.done.emit(ok)
-        except Exception: pass
-
 class MainWindow(QMainWindow):
     def __init__(self, store):
         super().__init__(); self.store = store; self.setWindowTitle(APP_NAME)
@@ -8885,14 +8807,6 @@ class MainWindow(QMainWindow):
         # is already clamped to that monitor in _clamp_to_screen).
         self.refresh_all(); _dump_windows("init-refresh-done"); self._ready = True
         self._maybe_usage_ping()
-        # v1.71.0: header Active users — first fetch now, then every 60s.
-        try:
-            self._au_timer = QTimer(self)
-            self._au_timer.timeout.connect(self._refresh_active_users)
-            self._au_timer.start(60000)
-            self._refresh_active_users()
-        except Exception:
-            pass
         # v1.65.0: What's New, once per version.
         try:
             if (store.get("last_seen_version", "") or "") != VERSION:
@@ -9157,75 +9071,22 @@ class MainWindow(QMainWindow):
             if s.get("window_size_autosave") and self.width() >= 900 and self.height() >= 600:
                 s["window_size"] = [self.width(), self.height()]; self.store.save()
 
-    def _refresh_active_users(self):
-        """v1.71.0: start a header-total fetch unless one is already
-        running. Never raises into startup or the timer."""
-        try:
-            t = getattr(self, "_au_thread", None)
-            if t is not None and t.isRunning():
-                return
-            # v1.71.1: no parent — a parented QThread deleted with the
-            # window while a fetch is still running warns (and can
-            # crash on exit); detached, it finishes on its own and
-            # cleans itself up, and the ref clears on finish so the
-            # next refresh can start a new one.
-            t = _ActiveUsersThread()
-            t.result.connect(self._on_active_users)
-            t.finished.connect(lambda: setattr(self, "_au_thread", None))
-            t.finished.connect(t.deleteLater)
-            self._au_thread = t
-            t.start()
-        except Exception:
-            pass
-
-    def _on_active_users(self, text):
-        try:
-            self.titlebar.active_users_label.setText(f"Active users: {text}")
-        except Exception:
-            pass
-
     def _maybe_usage_ping(self):
-        """v1.71.2: anonymous usage ping, OFF by default. When the
-        Settings toggle is on, send at most one SUCCESSFUL ping per day
-        to TWO places, both carrying ONLY the launcher version (no
-        username, no game data, no body): the project site (per-version
-        counts in the private Netlify dashboard) and the public counter
-        (the live total the website shows as Active users). v1.71.1
-        marked the day BEFORE sending, so a silently failed ping burned
-        the whole day and the counter stayed empty with no error shown
-        — that is what stranded his first attempt. Now the day is
-        marked only when a send succeeds (via the thread's done signal,
-        on the UI thread — no store writes off it), so a failed ping
-        retries on the next launch or toggle flip. The gate key is new
-        (usage_ping_success_day): old usage_ping_last_day marks are
-        unproven — written before success-tracking — so they must not
-        block a retry. A ping already in flight is not duplicated.
-        Never raises into startup."""
+        """v1.69.0: anonymous usage ping, OFF by default. When the
+        Settings toggle is on, send at most one ping per day: a GET to
+        the project site carrying ONLY the launcher version in the path
+        (no username, no IP stored by us, no game data, no body). The
+        day is marked before the thread starts, so the send itself runs
+        off the UI thread with no store writes from it, and a failed
+        ping just retries tomorrow. Never raises into startup."""
         try:
             if not self.store.get("usage_ping"):
                 return
             today = datetime.date.today().isoformat()
-            if (self.store.get("usage_ping_success_day", "") or "") == today:
+            if (self.store.get("usage_ping_last_day", "") or "") == today:
                 return
-            t = getattr(self, "_ping_thread", None)
-            if t is not None and t.isRunning():
-                return
-            t = _UsagePingThread()
-            t.done.connect(self._on_usage_ping_done)
-            t.finished.connect(t.deleteLater)
-            self._ping_thread = t
-            t.start()
-        except Exception:
-            pass
-
-    def _on_usage_ping_done(self, ok):
-        try:
-            self._ping_thread = None
-        except Exception:
-            pass
-        try:
-            if ok:
-                self.store.set("usage_ping_success_day", datetime.date.today().isoformat())
+            self.store.set("usage_ping_last_day", today)
+            threading.Thread(target=lambda: _send_usage_ping(VERSION), daemon=True).start()
         except Exception:
             pass
 
@@ -9233,12 +9094,9 @@ class MainWindow(QMainWindow):
         """v1.65.0: one-time What's New dialog for this version."""
         try:
             QMessageBox.information(self, f"What's new in {VERSION}",
-                "• Usage ping fix: a failed ping no longer burns the day — the day counts only once a ping actually lands, so a blocked first try retries on your next launch instead of leaving the counter empty until tomorrow. Your first v1.71.2 launch retries right away.\n"
-                "• Splash corners fixed: the loading screen is a true rounded pill now — the square pixmap corners no longer poke past the curve.\n"
-                "• Active users in the header: the live total from the public counter now sits next to the title, refreshed every minute (dash if it can't be reached).\n"
-                "• Loading screen restored: the branded LEGACY ARK Loading... splash is back while the UI builds — it was removed while the window-flashing bugs were still live, and those are fixed now.\n"
-                "• Usage counting (from v1.69/70, folded in here): opt-in, off by default — one anonymous ping per day, version only, feeding the public total and the private per-version counts.\n"
-                "• Download fix (from v1.68, folded in here): depot folders left over from another build no longer inflate the size number or mix newer files into your install — mismatched folders are wiped before downloading, same-build partials still resume.")
+                "• Anonymous usage counting (opt-in, off by default): Settings → Usage Counting sends one ping per day with only the launcher version — no username, no game data. Counts show in the site's Netlify analytics.\n"
+                "• Download fix (from v1.68, folded in here): depot folders left over from another build no longer inflate the size number or mix newer files into your install — mismatched folders are wiped before downloading, same-build partials still resume.\n"
+                "• New warning: if a download blows past twice its estimated size, the log says so — cancel it and report the numbers.")
             self.store.set("last_seen_version", VERSION)
         except Exception:
             pass
@@ -9499,42 +9357,13 @@ def main():
         store.set("theme", "ember")
     apply_theme(store.get("theme", "ember"), store)
     _set_palette()
-    # v1.71.0: splash screen restored — the v1.28.3 removal happened
-    # while the window-flashing bugs were still live; those are fixed
-    # now (v1.28.13 parents, v1.28.4/5 opacity + centering), so the
-    # branded Loading... screen is safe to show again while the UI
-    # builds. It is cosmetic only: any failure here never breaks
-    # startup, and it is always closed once the main window appears
-    # (or if the build itself fails, so a crash can never leave it
-    # stuck on screen).
-    splash = None
-    try:
-        _pm = _splash_pixmap()
-        splash = QSplashScreen(_pm)
-        try:
-            # v1.71.1: true pill shape — the pixmap is a square, so
-            # without a mask its black corners poke past the rounded
-            # border (his screenshot). Clip the window itself to the
-            # rounded rect; a mask failure just falls back to the
-            # square splash, never breaks startup.
-            _path = QPainterPath()
-            _path.addRoundedRect(QRectF(0, 0, _pm.width(), _pm.height()), 10, 10)
-            splash.setMask(QRegion(_path.toFillPolygon().toPolygon()))
-        except Exception:
-            pass
-        splash.show()
-        app.processEvents()
-    except Exception:
-        splash = None
+    # No splash screen (v1.28.3): the old QSplashScreen was the small
+    # flashing "LEGACY ARK" window on launch. MainWindow builds its
+    # cards before win.show(), so there is no half-painted window to
+    # cover — the splash itself was the flash.
     _dump_windows("before-MainWindow")
     store = Store()
-    try:
-        win = MainWindow(store)
-    except Exception:
-        try:
-            if splash is not None: splash.close()
-        except Exception: pass
-        raise
+    win = MainWindow(store)
     _dump_windows("after-MainWindow-before-show")
     try:
         _scr = app.primaryScreen()
@@ -9547,9 +9376,6 @@ def main():
     if store.get("start_maximized"):
         try: win.showMaximized()
         except Exception: pass
-    try:
-        if splash is not None: splash.finish(win)
-    except Exception: pass
     # v1.64.0: the v1.28.8 startup window diagnostic (which wrote
     # launcher-windows.log on every launch) is removed — the flashing
     # bug it hunted was fixed in v1.28.13, so no log file is created.
