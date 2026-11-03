@@ -12,6 +12,7 @@ import os
 import random
 import re
 import shutil
+import select
 import socket
 import struct
 import subprocess
@@ -20,6 +21,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+import uuid
 import zipfile
 from pathlib import Path
 from PyQt6.QtCore import Qt, QThread, QTimer, QUrl, QSize, QRect, pyqtSignal, QRectF, QPointF, QPoint, QObject, QEvent
@@ -35,13 +37,16 @@ from PyQt6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
 
 # ------------------------------------------------------------------ config
 APP_NAME = "Legacy ARK Launcher"
-VERSION = "v1.71.1"
-# v1.71.1: splash corners fixed — the restored splash drew a rounded
-# border on a square pixmap, so the black corners poked past the pill
-# shape (his screenshot); the splash window is now masked to the
-# rounded rect. Also: the header fetch thread is detached (not
-# parented to the window) so closing mid-fetch can't destroy a running
-# QThread. Folds in untested v1.71/70/69/68.
+VERSION = "v1.71.3"
+# v1.71.2: usage-ping retry fix — v1.71.1 marked the day BEFORE sending,
+# so a silently failed ping burned the whole day and the counter stayed
+# empty with no error (his case: his PC reaches the counter fine, the
+# ping code is correct, yet no hit ever landed). Now the day counts
+# only on success, on a fresh key (old usage_ping_last_day marks are
+# unproven — written before success-tracking — so his first v1.71.2
+# launch retries right away instead of waiting for tomorrow), and a
+# failed ping retries on the next launch or toggle flip. Folds in
+# untested v1.71.1/71/70/69/68.
 # v1.64.0: startup window diagnostic removed — no more launcher-windows.log
 # created next to the exe on every launch (leftover from the v1.28.8/v1.28.9
 # flashing-windows hunt; that bug was confirmed fixed in v1.28.13).
@@ -1573,7 +1578,7 @@ PUBLIC_PING_KEY = "legacy-ark-launcher-6frizz-active-users"
 PUBLIC_PING_HIT = "https://countapi.mileshilliard.com/api/v1/hit/" + PUBLIC_PING_KEY
 PUBLIC_PING_GET = "https://countapi.mileshilliard.com/api/v1/get/" + PUBLIC_PING_KEY
 # v1.70.0: public counter (no signup, no key; all keys/values public).
-# The website reads PUBLIC_PING_GET for the live "Active users" total.
+# The website's Active users now shows live presence (MQTT); PUBLIC_PING_GET remains the public daily total series.
 # A first hit creates the key; a get on an unknown key 404s, which just
 # means zero pings have landed yet. Public by design: anyone who knows
 # the key can read the total, and anyone could inflate it — so this is
@@ -2028,10 +2033,11 @@ class TitleBar(QWidget):
         h = QHBoxLayout(self); h.setContentsMargins(16, 16, 16, 16); h.setSpacing(10); self.h = h
         logo = QLabel(); logo.setPixmap(brand_pixmap(48)); logo.setFixedSize(48, 48); h.addWidget(logo)
         self.brand_text = QLabel(APP_NAME); self.brand_text.setObjectName("Brand"); self.brand_text.setMinimumWidth(0); h.addWidget(self.brand_text)
-        # v1.71.0: Active users, live from the public counter, right
-        # next to the title. Read-only: a plain GET of the public
-        # total, no data sent. MainWindow refreshes it (thread + 60s
-        # timer); failures show a dash, never an error popup.
+        # v1.71.3: Active users next to the title. When presence is
+        # live (Usage Counting on), it shows launchers online right
+        # now; otherwise it falls back to the public daily total
+        # (plain GET, no data sent). MainWindow refreshes the fallback
+        # (thread + 60s timer); failures show a dash, never a popup.
         self.active_users_label = QLabel("Active users: —"); self.active_users_label.setObjectName("Muted")
         self.active_users_label.setToolTip("Live total of daily check-ins from opted-in launchers.")
         h.addWidget(self.active_users_label)
@@ -2552,7 +2558,7 @@ class SettingsPage(QWidget):
         v.addWidget(self.update_status)
 
         v.addWidget(self._header("USAGE COUNTING"))
-        _sg = QLabel("Off by default. When on, the launcher sends one anonymous ping per day containing only the launcher version — no Steam username, no game data, nothing that identifies you. Counts show up in the site's Netlify analytics (per version) and as a public total on the website next to the title. The public total is just a number, and anyone who finds the counter address could inflate it, so treat it as a community counter, not an exact headcount. Turn it off any time and the pings stop."); _sg.setObjectName("Muted"); _sg.setWordWrap(True); v.addWidget(_sg)
+        _sg = QLabel("Off by default. When on, the launcher sends one anonymous ping per day containing only the launcher version — no Steam username, no game data, nothing that identifies you. Counts show up in the site's Netlify analytics (per version) and as a public daily total. While the launcher is open it also holds a live presence mark (an anonymous install ID only), so the website's Active users shows launchers online right now — closing the launcher clears it within seconds, and a crash clears it too. The public total is just a number, and anyone who finds the counter address could inflate it, so treat it as a community counter, not an exact headcount. Turn it off any time and the pings stop."); _sg.setObjectName("Muted"); _sg.setWordWrap(True); v.addWidget(_sg)
         self.usage_ping_cb = QCheckBox("Help count launcher users (anonymous, version only)")
         self.usage_ping_cb.setChecked(bool(self.store.get("usage_ping")))
         def _on_usage_ping(checked):
@@ -2560,6 +2566,8 @@ class SettingsPage(QWidget):
             if checked:
                 try: main._maybe_usage_ping()
                 except Exception: pass
+            try: main._update_presence()
+            except Exception: pass
         self.usage_ping_cb.toggled.connect(_on_usage_ping)
         v.addWidget(self.usage_ping_cb)
 
@@ -3052,7 +3060,7 @@ class HelpPage(QWidget):
         at = QLabel(f"About Legacy ARK Launcher {VERSION}"); at.setObjectName("RowTitle"); av.addWidget(at)
         ad = QLabel("Old ARK builds, 2015 to 2024 — downloaded through your own Steam account, only builds you own. "
                     "Made for the OG Ark community."); ad.setObjectName("Muted"); ad.setWordWrap(True); av.addWidget(ad)
-        au = QLabel("Usage counting is off unless you turn it on in Settings → Usage Counting. When on, the launcher sends one anonymous ping per day with only the launcher version — no username, no game data. Totals show on the website as Active users, and the same total shows in the header."); au.setObjectName("Muted"); au.setWordWrap(True); av.addWidget(au)
+        au = QLabel("Usage counting is off unless you turn it on in Settings → Usage Counting. When on, the launcher sends one anonymous ping per day with only the launcher version — no username, no game data. The website's Active users shows launchers online right now (live presence); the same live count shows in the header when presence is on, and the daily total otherwise."); au.setObjectName("Muted"); au.setWordWrap(True); av.addWidget(au)
         arow = FlowLayout(); arow.setSpacing(10)
         for _txt, _url in [("Website", "https://legacy-ark-launcher.netlify.app/"), ("Discord", DISCORD_INVITE_URL), ("GitHub", "https://github.com/6frizz/Legacy-ARK-Launcher")]:
             _b = QPushButton(_txt); _b.clicked.connect(lambda _c=False, _u=_url: _open_url(_u)); arow.addWidget(_b)
@@ -8672,6 +8680,214 @@ def _fetch_active_users():
     except Exception:
         return "—"
 
+PRESENCE_BROKER_HOST = "broker.hivemq.com"
+PRESENCE_BROKER_PORT = 1883
+PRESENCE_TOPIC_PREFIX = "legacyark/presence/v1/"
+
+def _mqtt_encode_length(n):
+    """MQTT variable-byte remaining-length encoding."""
+    out = bytearray()
+    while True:
+        b = n % 128
+        n //= 128
+        if n:
+            out.append(b | 0x80)
+        else:
+            out.append(b)
+            break
+    return bytes(out)
+
+def _mqtt_encode_string(s):
+    b = s.encode("utf-8")
+    return len(b).to_bytes(2, "big") + b
+
+def _mqtt_connect_packet(client_id, will_topic, will_payload, keepalive=60):
+    """CONNECT with clean session, Will (QoS 0, retained) and keepalive.
+    Flags: clean session 0x02 | will flag 0x04 | will retain 0x20."""
+    var = b"\x00\x04MQTT\x04"
+    var += bytes([0x02 | 0x04 | 0x20]) + keepalive.to_bytes(2, "big")
+    payload = _mqtt_encode_string(client_id)
+    payload += _mqtt_encode_string(will_topic)
+    payload += _mqtt_encode_string(will_payload)
+    body = var + payload
+    return b"\x10" + _mqtt_encode_length(len(body)) + body
+
+def _mqtt_publish_packet(topic, payload, retain=True):
+    body = _mqtt_encode_string(topic) + payload.encode("utf-8")
+    header = 0x30 | (0x01 if retain else 0x00)
+    return bytes([header]) + _mqtt_encode_length(len(body)) + body
+
+def _mqtt_subscribe_packet(packet_id, topic):
+    body = packet_id.to_bytes(2, "big") + _mqtt_encode_string(topic) + b"\x00"
+    return b"\x82" + _mqtt_encode_length(len(body)) + body
+
+def _mqtt_parse_packets(buf):
+    """Parse complete MQTT packets out of buf. Returns (packets, rest)
+    where each packet is (type_byte, payload_bytes). Partial packets
+    stay in rest; malformed length fields drop one byte so a corrupt
+    stream cannot wedge the parser forever."""
+    packets = []
+    i = 0
+    n = len(buf)
+    while i < n:
+        if i + 1 >= n:
+            break
+        mult = 1
+        length = 0
+        j = i + 1
+        count = 0
+        bad = False
+        while True:
+            if j >= n:
+                return packets, buf[i:]
+            b = buf[j]
+            length += (b & 0x7F) * mult
+            mult *= 128
+            j += 1
+            count += 1
+            if not (b & 0x80):
+                break
+            if count >= 4:
+                bad = True
+                break
+        if bad or length > 1024 * 1024:
+            return packets, buf[i + 1:]
+        if j + length > n:
+            return packets, buf[i:]
+        packets.append((buf[i] & 0xF0, buf[j:j + length]))
+        i = j + length
+    return packets, buf[i:]
+
+class _PresenceThread(QThread):
+    """v1.71.3: live presence over MQTT (no new dependency — a minimal
+    MQTT 3.1.1 client on a raw socket). Same opt-in toggle as the usage
+    ping, same anonymity: the only identity is a random install UUID
+    stored in settings; no username, no game data. Publishes retained
+    'online' on connect, pings to hold the connection, and publishes
+    retained 'offline' + DISCONNECT on a clean stop. If the process
+    dies without a clean stop, the broker fires the Last Will
+    ('offline', retained) when the TCP connection drops — so a crash
+    still clears presence. Subscribes to the presence wildcard so the
+    header can show the live online count; retained messages deliver
+    the current set on subscribe. Detached (no parent); finished ->
+    deleteLater. Count updates go out on the count signal (Qt queued
+    connection) — no UI touches off the thread."""
+    count = pyqtSignal(int)
+    def __init__(self, presence_id):
+        super().__init__()
+        self.presence_id = presence_id
+        self._stop = False
+        self._sock = None
+    def request_stop(self):
+        # Flag only — no socket shutdown: the pump loop notices within
+        # ~1s (select timeout) and does the graceful offline publish +
+        # DISCONNECT. Shutting the socket down here would make that
+        # publish fail.
+        self._stop = True
+    def run(self):
+        topic = PRESENCE_TOPIC_PREFIX + self.presence_id
+        backoff = 5.0
+        while not self._stop:
+            try:
+                self._run_once(topic)
+                backoff = 5.0
+            except Exception:
+                pass
+            if self._stop:
+                break
+            slept = 0.0
+            while not self._stop and slept < backoff:
+                time.sleep(0.2)
+                slept += 0.2
+            backoff = min(backoff * 2.0, 30.0)
+    def _run_once(self, topic):
+        """One connection lifetime: connect, publish online, subscribe,
+        then pump packets (pings + count updates) until error or stop.
+        On a clean stop, publish offline + DISCONNECT before returning;
+        on error or broker close, return without them and let the
+        broker fire the Will."""
+        sock = socket.create_connection(
+            (PRESENCE_BROKER_HOST, PRESENCE_BROKER_PORT), timeout=10)
+        self._sock = sock
+        try:
+            sock.sendall(_mqtt_connect_packet(
+                self.presence_id, topic, "offline", keepalive=60))
+            # CONNACK is 4 bytes; read exactly (TCP may fragment it).
+            connack = bytearray()
+            end = time.time() + 12.0
+            while len(connack) < 4 and time.time() < end:
+                try:
+                    chunk = sock.recv(4 - len(connack))
+                except Exception:
+                    chunk = b""
+                if not chunk:
+                    break
+                connack += chunk
+            if len(connack) < 4 or connack[0] != 0x20 or connack[3] != 0x00:
+                return
+            sock.sendall(_mqtt_publish_packet(topic, "online", retain=True))
+            sock.sendall(_mqtt_subscribe_packet(1, PRESENCE_TOPIC_PREFIX + "#"))
+            online = {}
+            buf = bytearray()
+            last_ping = time.time()
+            sock.settimeout(None)
+            while True:
+                if self._stop:
+                    break
+                r, _, _ = select.select([sock], [], [], 1.0)
+                if r:
+                    try:
+                        chunk = sock.recv(4096)
+                    except Exception:
+                        chunk = b""
+                    if not chunk:
+                        if self._stop:
+                            break
+                        return  # broker closed or error: Will fires
+                    buf += chunk
+                    packets, rest = _mqtt_parse_packets(bytes(buf))
+                    buf = bytearray(rest)
+                    for ptype, payload in packets:
+                        if ptype == 0x30 and len(payload) >= 2:
+                            tlen = int.from_bytes(payload[0:2], "big")
+                            if len(payload) >= 2 + tlen:
+                                t = payload[2:2 + tlen].decode("utf-8", "replace")
+                                m = payload[2 + tlen:].decode("utf-8", "replace")
+                                if t.startswith(PRESENCE_TOPIC_PREFIX):
+                                    uid = t[len(PRESENCE_TOPIC_PREFIX):]
+                                    if uid:
+                                        if m == "online":
+                                            online[uid] = True
+                                        elif m == "offline":
+                                            online.pop(uid, None)
+                                        try: self.count.emit(len(online))
+                                        except Exception: pass
+                if self._stop:
+                    break
+                if time.time() - last_ping >= 45.0:
+                    try:
+                        sock.sendall(b"\xc0\x00")
+                    except Exception:
+                        if self._stop:
+                            break
+                        return
+                    last_ping = time.time()
+            # Clean stop only (reached via break): publish offline, DISCONNECT.
+            try:
+                sock.sendall(_mqtt_publish_packet(topic, "offline", retain=True))
+            except Exception:
+                pass
+            try:
+                sock.sendall(b"\xe0\x00")
+            except Exception:
+                pass
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+            self._sock = None
+
 class _ActiveUsersThread(QThread):
     """v1.71.0: fetch the header total off the UI thread; the result
     signal is what touches the label (Qt queued connection)."""
@@ -8681,6 +8897,28 @@ class _ActiveUsersThread(QThread):
         except Exception:
             try: self.result.emit("—")
             except Exception: pass
+
+class _UsagePingThread(QThread):
+    """v1.71.2: send both usage pings off the UI thread and report
+    whether either one succeeded. Detached (no parent) like the header
+    fetch thread, so closing the window mid-ping can't destroy a
+    running thread; finished -> deleteLater. The done signal is what
+    marks the day (on the UI thread) — no store writes off it."""
+    done = pyqtSignal(bool)
+    def run(self):
+        ok = False
+        try:
+            if _send_usage_ping(VERSION):
+                ok = True
+        except Exception:
+            pass
+        try:
+            if _send_public_ping():
+                ok = True
+        except Exception:
+            pass
+        try: self.done.emit(ok)
+        except Exception: pass
 
 class MainWindow(QMainWindow):
     def __init__(self, store):
@@ -8860,6 +9098,17 @@ class MainWindow(QMainWindow):
         # is already clamped to that monitor in _clamp_to_screen).
         self.refresh_all(); _dump_windows("init-refresh-done"); self._ready = True
         self._maybe_usage_ping()
+        # v1.71.3: live presence — same opt-in toggle as the ping.
+        try: self._update_presence()
+        except Exception: pass
+        # v1.71.3: stop presence on a REAL quit (aboutToQuit fires for
+        # every real quit path — window close and tray Quit — but never
+        # for hide-to-tray, where the launcher is still running and
+        # presence must stay up).
+        try:
+            QApplication.instance().aboutToQuit.connect(lambda: self._stop_presence(refresh=False))
+        except Exception:
+            pass
         # v1.71.0: header Active users — first fetch now, then every 60s.
         try:
             self._au_timer = QTimer(self)
@@ -9155,33 +9404,128 @@ class MainWindow(QMainWindow):
 
     def _on_active_users(self, text):
         try:
+            if getattr(self, "_presence_live", False):
+                return  # v1.71.3: live presence owns the label while on
             self.titlebar.active_users_label.setText(f"Active users: {text}")
         except Exception:
             pass
 
+    def _presence_id(self):
+        """v1.71.3: anonymous install UUID for presence, created on the
+        UI thread (no store writes off it). Only exists while the
+        toggle is on; it identifies one install, nothing else."""
+        try:
+            pid = (self.store.get("presence_id", "") or "").strip()
+            if not pid:
+                pid = uuid.uuid4().hex
+                self.store.set("presence_id", pid)
+            return pid
+        except Exception:
+            return uuid.uuid4().hex
+
+    def _update_presence(self):
+        """v1.71.3: start presence when the toggle is on, stop it when
+        off. Starting is idempotent (an already-running thread is not
+        duplicated); stopping publishes offline and falls the header
+        back to the daily total."""
+        try:
+            if self.store.get("usage_ping"):
+                t = getattr(self, "_presence_thread", None)
+                if t is not None and t.isRunning():
+                    return
+                t = _PresenceThread(self._presence_id())
+                t.count.connect(self._on_presence_count)
+                t.finished.connect(lambda: setattr(self, "_presence_thread", None))
+                t.finished.connect(t.deleteLater)
+                self._presence_thread = t
+                t.start()
+            else:
+                self._stop_presence()
+        except Exception:
+            pass
+
+    def _on_presence_count(self, n):
+        try:
+            self._presence_live = True
+            self.titlebar.active_users_label.setText(f"Active users: {n}")
+            self.titlebar.active_users_label.setToolTip("Launchers online right now (opted-in only).")
+        except Exception:
+            pass
+
+    def _stop_presence(self, refresh=True):
+        """v1.71.3: stop the presence thread (it publishes offline +
+        DISCONNECT on its way out) and fall the header back to the
+        daily total. Waits at most ~2s; if the thread is stuck, the
+        broker's Last Will clears presence when the socket dies.
+        refresh=False skips the fallback fetch (used on quit, where
+        starting a thread is pointless)."""
+        try:
+            t = getattr(self, "_presence_thread", None)
+            if t is not None and t.isRunning():
+                try:
+                    t.request_stop()
+                except Exception:
+                    pass
+                try:
+                    t.wait(2000)
+                except Exception:
+                    pass
+            self._presence_thread = None
+        except Exception:
+            pass
+        try:
+            self._presence_live = False
+            self.titlebar.active_users_label.setToolTip("Live total of daily check-ins from opted-in launchers.")
+        except Exception:
+            pass
+        if refresh:
+            try:
+                self._refresh_active_users()
+            except Exception:
+                pass
+
     def _maybe_usage_ping(self):
-        """v1.70.0: anonymous usage ping, OFF by default. When the
-        Settings toggle is on, send at most one ping per day to TWO
-        places, both carrying ONLY the launcher version (no username,
-        no IP stored by us, no game data, no body): the project site
-        (per-version counts in the private Netlify dashboard) and the
-        public counter (the live total the website shows as Active
-        users). The day is marked before the thread starts, so the
-        sends run off the UI thread with no store writes from them, and
-        failed pings just retry tomorrow. Never raises into startup."""
+        """v1.71.2: anonymous usage ping, OFF by default. When the
+        Settings toggle is on, send at most one SUCCESSFUL ping per day
+        to TWO places, both carrying ONLY the launcher version (no
+        username, no game data, no body): the project site (per-version
+        counts in the private Netlify dashboard) and the public counter
+        (the public daily total; the website's Active users now shows live presence instead). v1.71.1
+        marked the day BEFORE sending, so a silently failed ping burned
+        the whole day and the counter stayed empty with no error shown
+        — that is what stranded his first attempt. Now the day is
+        marked only when a send succeeds (via the thread's done signal,
+        on the UI thread — no store writes off it), so a failed ping
+        retries on the next launch or toggle flip. The gate key is new
+        (usage_ping_success_day): old usage_ping_last_day marks are
+        unproven — written before success-tracking — so they must not
+        block a retry. A ping already in flight is not duplicated.
+        Never raises into startup."""
         try:
             if not self.store.get("usage_ping"):
                 return
             today = datetime.date.today().isoformat()
-            if (self.store.get("usage_ping_last_day", "") or "") == today:
+            if (self.store.get("usage_ping_success_day", "") or "") == today:
                 return
-            self.store.set("usage_ping_last_day", today)
-            def _go():
-                try: _send_usage_ping(VERSION)
-                except Exception: pass
-                try: _send_public_ping()
-                except Exception: pass
-            threading.Thread(target=_go, daemon=True).start()
+            t = getattr(self, "_ping_thread", None)
+            if t is not None and t.isRunning():
+                return
+            t = _UsagePingThread()
+            t.done.connect(self._on_usage_ping_done)
+            t.finished.connect(t.deleteLater)
+            self._ping_thread = t
+            t.start()
+        except Exception:
+            pass
+
+    def _on_usage_ping_done(self, ok):
+        try:
+            self._ping_thread = None
+        except Exception:
+            pass
+        try:
+            if ok:
+                self.store.set("usage_ping_success_day", datetime.date.today().isoformat())
         except Exception:
             pass
 
@@ -9189,6 +9533,8 @@ class MainWindow(QMainWindow):
         """v1.65.0: one-time What's New dialog for this version."""
         try:
             QMessageBox.information(self, f"What's new in {VERSION}",
+                "• Live Active users: the header and website now show launchers actually online right now, not the daily total — closing the launcher clears you within seconds, and a crash clears you too (the broker's last-will). Same opt-in toggle, anonymous install ID only, no username or game data.\n"
+                "• Usage ping fix: a failed ping no longer burns the day — the day counts only once a ping actually lands, so a blocked first try retries on your next launch instead of leaving the counter empty until tomorrow. Your first v1.71.2 launch retries right away.\n"
                 "• Splash corners fixed: the loading screen is a true rounded pill now — the square pixmap corners no longer poke past the curve.\n"
                 "• Active users in the header: the live total from the public counter now sits next to the title, refreshed every minute (dash if it can't be reached).\n"
                 "• Loading screen restored: the branded LEGACY ARK Loading... splash is back while the UI builds — it was removed while the window-flashing bugs were still live, and those are fixed now.\n"
