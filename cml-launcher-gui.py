@@ -12,15 +12,19 @@ import os
 import random
 import re
 import shutil
+import socket
+import struct
 import subprocess
 import sys
+import threading
 import time
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
 from PyQt6.QtCore import Qt, QThread, QTimer, QUrl, QSize, QRect, pyqtSignal, QRectF, QPointF, QPoint, QObject, QEvent
 from PyQt6.QtGui import (QColor, QDesktopServices, QFont,
-                         QIcon, QPalette, QPen, QPainter, QPainterPath, QPixmap, QPolygon)
+                         QIcon, QPalette, QPen, QPainter, QPainterPath, QPixmap, QPolygon, QRegion)
 from PyQt6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
                              QDialog, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
                              QGridLayout, QHBoxLayout, QLabel, QLayout, QWidgetItem, QLineEdit, QListWidget,
@@ -31,7 +35,16 @@ from PyQt6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
 
 # ------------------------------------------------------------------ config
 APP_NAME = "Legacy ARK Launcher"
-VERSION = "v1.64.0"
+VERSION = "v1.71.2"
+# v1.71.2: usage-ping retry fix — v1.71.1 marked the day BEFORE sending,
+# so a silently failed ping burned the whole day and the counter stayed
+# empty with no error (his case: his PC reaches the counter fine, the
+# ping code is correct, yet no hit ever landed). Now the day counts
+# only on success, on a fresh key (old usage_ping_last_day marks are
+# unproven — written before success-tracking — so his first v1.71.2
+# launch retries right away instead of waiting for tomorrow), and a
+# failed ping retries on the next launch or toggle flip. Folds in
+# untested v1.71.1/71/70/69/68.
 # v1.64.0: startup window diagnostic removed — no more launcher-windows.log
 # created next to the exe on every launch (leftover from the v1.28.8/v1.28.9
 # flashing-windows hunt; that bug was confirmed fixed in v1.28.13).
@@ -1145,6 +1158,9 @@ class Store:
         "window_size_autosave": True, "window_size": None,
         "sidebar_width": 240, "sidebar_collapsed": False,
         "launch_args": "", "favorites": [], "dlc_excluded": {},
+        "servers": [],  # v1.65.0: user-added servers {name, ip, game_port, query_port, cluster, favorite}
+        "game_culture": "",  # v1.66.0: "" = Steam default, else a -culture= code appended at Play
+        "close_on_launch": False,  # v1.66.0: close the launcher when the game launches
         "steam_path": "", "install_dir": "", "default_dlc_excluded": [],
         "steam_username": "",
         "custom_background": "", "background_opacity": 1.0,
@@ -1537,6 +1553,47 @@ class _SetupSteamcmdThread(QThread):
         ok, msg = setup_steamcmd(progress=self.progress.emit)
         self.done.emit(ok, msg)
 
+USAGE_PING_BASE = "https://legacy-ark-launcher.netlify.app/usage"
+# v1.69.0: counts live in the site's Netlify analytics under "Top
+# resources not found" — Web Analytics only counts 200/201/304 HTML
+# responses as pageviews, but it still lists 404'd resources with their
+# totals, so one ping per user per day reads as user-days per version.
+def _send_usage_ping(version):
+    """GET the version path; True if the server answered at all (even
+    404 — the request was logged, which is the whole point). False only
+    on a network failure. Sends nothing but the version in the path."""
+    url = USAGE_PING_BASE.rstrip("/") + "/" + urllib.parse.quote(str(version), safe="")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "LegacyARKLauncher/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as _resp:
+            return True
+    except urllib.error.HTTPError:
+        return True
+    except Exception:
+        return False
+
+PUBLIC_PING_KEY = "legacy-ark-launcher-6frizz-active-users"
+PUBLIC_PING_HIT = "https://countapi.mileshilliard.com/api/v1/hit/" + PUBLIC_PING_KEY
+PUBLIC_PING_GET = "https://countapi.mileshilliard.com/api/v1/get/" + PUBLIC_PING_KEY
+# v1.70.0: public counter (no signup, no key; all keys/values public).
+# The website reads PUBLIC_PING_GET for the live "Active users" total.
+# A first hit creates the key; a get on an unknown key 404s, which just
+# means zero pings have landed yet. Public by design: anyone who knows
+# the key can read the total, and anyone could inflate it — so this is
+# a community counter, not an audited headcount.
+def _send_public_ping():
+    """GET the hit endpoint; True on any HTTP response, False only on
+    a network failure. Sends no data at all — the URL itself is the
+    count, and the count is a running total of daily check-ins."""
+    try:
+        req = urllib.request.Request(PUBLIC_PING_HIT, headers={"User-Agent": "LegacyARKLauncher/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as _resp:
+            return True
+    except urllib.error.HTTPError:
+        return True
+    except Exception:
+        return False
+
 class DownloadWorker(QThread):
     progress = pyqtSignal(str)
     progress_pct = pyqtSignal(int)  # 0-100 determinate progress
@@ -1593,6 +1650,61 @@ class DownloadWorker(QThread):
             self.progress.emit(f"Couldn't start SteamCMD: {e}")
             return None
 
+    def _prepare_depot_folders(self, depot_root, depots):
+        """v1.68.0: a depot folder survives failed/cancelled downloads
+        (partials are kept for resume), and SteamCMD's download_depot
+        does NOT purge files from an older manifest. So a folder left
+        over from another build used to inflate the progress number AND
+        pollute the install with newer files. Track which manifest each
+        folder holds in depot_root/.cml-depot-manifests.json (outside any
+        depot folder, so it never gets copied into the game):
+        - folder holds a different manifest, or no marker at all
+          (pre-fix leftovers) -> delete it, log why;
+        - folder holds THIS build's manifest -> keep it (resume) and
+          log how much is already there, so a nonzero start reads right.
+        The marker is written BEFORE SteamCMD runs, so a cancelled
+        download still resumes correctly next time."""
+        try:
+            Path(depot_root).mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        marker_file = Path(depot_root) / ".cml-depot-manifests.json"
+        markers = {}
+        try:
+            if marker_file.is_file():
+                markers = json.loads(marker_file.read_text()) or {}
+                if not isinstance(markers, dict): markers = {}
+        except (OSError, ValueError):
+            markers = {}
+        changed = False
+        for depot_id, manifest, dname, _min in depots:
+            folder = Path(depot_root) / f"depot_{depot_id}"
+            key = str(depot_id); want = str(manifest)
+            if folder.is_dir():
+                have = markers.get(key)
+                if have != want:
+                    try:
+                        size = dir_size_gb(str(folder))
+                        shutil.rmtree(folder)
+                        if have is None:
+                            self.progress.emit(f"Cleared {size:.1f} GB of old files for {dname} (left over from before the launcher tracked downloads) — they were inflating the size and would have mixed into this build.")
+                        else:
+                            self.progress.emit(f"Cleared {size:.1f} GB of old files for {dname} (left over from another build) — they were inflating the size and would have mixed into this build.")
+                    except OSError as e:
+                        self.progress.emit(f"Couldn't clear old files for {dname}: {e}")
+                else:
+                    try:
+                        size = dir_size_gb(str(folder))
+                        if size > 0.05:
+                            self.progress.emit(f"Resuming {dname}: {size:.1f} GB already downloaded for this same build.")
+                    except OSError:
+                        pass
+            if markers.get(key) != want:
+                markers[key] = want; changed = True
+        if changed:
+            try: marker_file.write_text(json.dumps(markers))
+            except OSError: pass
+
     def _watch_steamcmd(self, proc, depot_root, depots):
         """Wait on a running SteamCMD download. Returns True only if the
         process finished AND every depot folder holds at least its min_gb."""
@@ -1635,6 +1747,7 @@ class DownloadWorker(QThread):
         last_size, last_t = _total_gb(), time.time()
         deadline = last_t + 3 * 3600
         code = None
+        warned_big = False
         while time.time() < deadline:
             if self._cancel:
                 try: proc.kill()
@@ -1652,6 +1765,9 @@ class DownloadWorker(QThread):
             if dt > 0.1:
                 mbps = max(0.0, (size - last_size) / dt * 1024.0)
                 self.progress.emit(f"Downloading — {size:.1f} GB so far ({mbps:.1f} MB/s) — leave the SteamCMD window open until it finishes.")
+                if not warned_big and size > total_est * 2:
+                    warned_big = True
+                    self.progress.emit(f"Warning: this download is already {size:.1f} GB but {self.version.get('name', '')} was estimated at ~{total_est:.0f} GB — cancel it and report the numbers, the build's download info is probably wrong.")
                 try:
                     self.progress_pct.emit(min(95, int(size / total_est * 100)))
                 except Exception:
@@ -1701,6 +1817,9 @@ class DownloadWorker(QThread):
         depot_root = steamcmd_depot_root()
         game_dir = (Path(self.install_root) if self.install_root else Path.home() / "CML-ARK") / slugify(name)
         depots = version_depots(self.version, self.excluded)
+        # v1.68.0: wipe depot folders left over from other builds before
+        # SteamCMD runs (same-build partials still resume).
+        self._prepare_depot_folders(depot_root, depots)
 
         ok = False
         for attempt in range(1, 4):
@@ -1912,6 +2031,13 @@ class TitleBar(QWidget):
         h = QHBoxLayout(self); h.setContentsMargins(16, 16, 16, 16); h.setSpacing(10); self.h = h
         logo = QLabel(); logo.setPixmap(brand_pixmap(48)); logo.setFixedSize(48, 48); h.addWidget(logo)
         self.brand_text = QLabel(APP_NAME); self.brand_text.setObjectName("Brand"); self.brand_text.setMinimumWidth(0); h.addWidget(self.brand_text)
+        # v1.71.0: Active users, live from the public counter, right
+        # next to the title. Read-only: a plain GET of the public
+        # total, no data sent. MainWindow refreshes it (thread + 60s
+        # timer); failures show a dash, never an error popup.
+        self.active_users_label = QLabel("Active users: —"); self.active_users_label.setObjectName("Muted")
+        self.active_users_label.setToolTip("Live total of daily check-ins from opted-in launchers.")
+        h.addWidget(self.active_users_label)
         h.addSpacing(16)
         self.nav_widget = QWidget(); self.nav_layout = QHBoxLayout(self.nav_widget); self.nav_layout.setContentsMargins(0, 0, 0, 0); self.nav_layout.setSpacing(4); h.addWidget(self.nav_widget)
         h.addStretch(1)
@@ -2428,6 +2554,18 @@ class SettingsPage(QWidget):
         self.update_status = QLabel(""); self.update_status.setObjectName("Muted"); self.update_status.setWordWrap(True)
         v.addWidget(self.update_status)
 
+        v.addWidget(self._header("USAGE COUNTING"))
+        _sg = QLabel("Off by default. When on, the launcher sends one anonymous ping per day containing only the launcher version — no Steam username, no game data, nothing that identifies you. Counts show up in the site's Netlify analytics (per version) and as a public total on the website next to the title. The public total is just a number, and anyone who finds the counter address could inflate it, so treat it as a community counter, not an exact headcount. Turn it off any time and the pings stop."); _sg.setObjectName("Muted"); _sg.setWordWrap(True); v.addWidget(_sg)
+        self.usage_ping_cb = QCheckBox("Help count launcher users (anonymous, version only)")
+        self.usage_ping_cb.setChecked(bool(self.store.get("usage_ping")))
+        def _on_usage_ping(checked):
+            self.store.set("usage_ping", bool(checked))
+            if checked:
+                try: main._maybe_usage_ping()
+                except Exception: pass
+        self.usage_ping_cb.toggled.connect(_on_usage_ping)
+        v.addWidget(self.usage_ping_cb)
+
         v.addWidget(self._header("DATA"))
         _sg = QLabel("Back up, move, or wipe your launcher settings. Export saves a copy of all your settings to a file you pick. Import loads one back. Clear Settings puts every setting back to the defaults — it does NOT delete your downloaded ARK builds, but it does forget favorites, paths, and launch arguments, so export first if you are not sure."); _sg.setObjectName("Muted"); _sg.setWordWrap(True); v.addWidget(_sg)
         self.delete_combo = QComboBox()
@@ -2900,7 +3038,9 @@ class HelpPage(QWidget):
         ("Black screen with music / game window won't show",
          "Old builds sometimes fail at fullscreen on modern PCs. In Settings → Default Launch Arguments put: -sm4 -windowed -ResX=1280 -ResY=720 then hit Play again. (-sm4 = the old graphics path, -windowed avoids the fullscreen problem.) If the game seems stuck, end ShooterGame.exe in Task Manager first."),
         ("Play launches but where's the server?",
-         "Play only opens the game to the main menu — it never auto-joins. Join a server from the in-game browser."),
+         "Play only opens the game to the main menu — it never auto-joins. Join a server from the Servers tab, or from the in-game browser."),
+        ("How do Servers work?",
+         "Add a server on the Servers tab with its IP, game port (usually 7777), and query port (usually 27015). The launcher asks the server for its name, map, player count, PvE/PvP, and cluster — servers sharing a ClusterId group together. Join opens it in Steam; Join with build launches one of your timecapsule builds straight into it. Only servers you add are listed — there are no sponsored or community servers. You must own ARK on Steam to join."),
     ]
 
     def __init__(self, main):
@@ -2910,6 +3050,17 @@ class HelpPage(QWidget):
         inner = QWidget(); v = QVBoxLayout(inner); v.setContentsMargins(28, 24, 28, 28); v.setSpacing(14); v.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         v.addWidget(page_header("Help", "Answers to the usual questions."))
+        about = QFrame(); about.setObjectName("Card")
+        av = QVBoxLayout(about); av.setContentsMargins(16, 12, 16, 12); av.setSpacing(8)
+        at = QLabel(f"About Legacy ARK Launcher {VERSION}"); at.setObjectName("RowTitle"); av.addWidget(at)
+        ad = QLabel("Old ARK builds, 2015 to 2024 — downloaded through your own Steam account, only builds you own. "
+                    "Made for the OG Ark community."); ad.setObjectName("Muted"); ad.setWordWrap(True); av.addWidget(ad)
+        au = QLabel("Usage counting is off unless you turn it on in Settings → Usage Counting. When on, the launcher sends one anonymous ping per day with only the launcher version — no username, no game data. Totals show on the website as Active users, and the same total shows in the header."); au.setObjectName("Muted"); au.setWordWrap(True); av.addWidget(au)
+        arow = FlowLayout(); arow.setSpacing(10)
+        for _txt, _url in [("Website", "https://legacy-ark-launcher.netlify.app/"), ("Discord", DISCORD_INVITE_URL), ("GitHub", "https://github.com/6frizz/Legacy-ARK-Launcher")]:
+            _b = QPushButton(_txt); _b.clicked.connect(lambda _c=False, _u=_url: _open_url(_u)); arow.addWidget(_b)
+        arow.addStretch(1); av.addLayout(arow)
+        v.addWidget(about)
         for q, a in self.FAQ:
             v.addWidget(self._qa(q, a))
 
@@ -4780,6 +4931,12 @@ class VersionsPage(QWidget):
         args_str = ((profiles.get(v.get("name", ""), "") or "").strip()
                     or self.main.store.get("launch_args", "").strip())
 
+        # v1.66.0: game language (TEK appends -culture= always; here it
+        # only applies when the user picked one, so Steam default stays).
+        culture = (self.main.store.get("game_culture", "") or "").strip()
+        if culture and "-culture" not in args_str:
+            args_str = (args_str + f" -culture={culture}").strip()
+
         # Launch via the desktop shortcut (which carries the custom "A"
         # icon) so the taskbar button shows it while the game loads — a
         # raw exe launch shows a generic icon instead. Refresh the
@@ -4793,6 +4950,9 @@ class VersionsPage(QWidget):
                     if self.main.store.get("discord_rich_presence"):
                         discord_set_playing(self.main.store.get("discord_client_id", ""), v.get("name", ""))
                 except Exception: pass
+                if self.main.store.get("close_on_launch"):
+                    try: self.main.close()
+                    except Exception: pass
                 return
             except OSError:
                 pass
@@ -4805,6 +4965,9 @@ class VersionsPage(QWidget):
                 if self.main.store.get("discord_rich_presence"):
                     discord_set_playing(self.main.store.get("discord_client_id", ""), v.get("name", ""))
             except Exception: pass
+            if self.main.store.get("close_on_launch"):
+                try: self.main.close()
+                except Exception: pass
         except OSError as e: QMessageBox.warning(self, APP_NAME, f"Couldn't launch the game: {e}")
 
     def _on_open_folder(self):
@@ -6190,6 +6353,60 @@ class ModsPage(QWidget):
         # (Export mods CSV, Open first Workshop, etc. — the buttons
         # in his screenshot). Mod search, filters, and mod cards stay.
 
+        # v1.65.0: install any Workshop mod by ID (same SteamCMD worker
+        # as catalog installs — owned game only, latest mod version).
+        ws = QFrame(); ws.setObjectName("Card")
+        wv = QVBoxLayout(ws); wv.setContentsMargins(16, 12, 16, 12); wv.setSpacing(8)
+        wt = QLabel("Install a Workshop mod by ID"); wt.setObjectName("RowTitle"); wv.addWidget(wt)
+        wd = QLabel("Downloads the latest version of any Workshop mod with SteamCMD and installs it into the build selected above. "
+                    "You must own ARK on Steam. Warning: this downloads the latest mod version, which may not work on very old builds — "
+                    "the catalog above lists versions known to work."); wd.setObjectName("Muted"); wd.setWordWrap(True); wv.addWidget(wd)
+        wrow = FlowLayout(); wrow.setSpacing(10)
+        self.ws_id_e = QLineEdit(); self.ws_id_e.setPlaceholderText("Workshop ID, e.g. 123456789"); wrow.addWidget(self.ws_id_e, 1)
+        ws_b = QPushButton("Install by ID"); ws_b.setObjectName("Primary"); ws_b.clicked.connect(self._on_install_by_id); wrow.addWidget(ws_b)
+        chk_b = QPushButton("Check"); chk_b.clicked.connect(self._on_check_by_id); wrow.addWidget(chk_b)
+        wrow.addStretch(1); wv.addLayout(wrow)
+        # v1.67.0: preview image for the checked mod (TEK's preview pane).
+        self.ws_preview = QLabel(); self.ws_preview.setFixedSize(128, 128); self.ws_preview.setVisible(False)
+        wv.addWidget(self.ws_preview)
+        v.addWidget(ws)
+
+        # v1.66.0: Workshop browse/search (TEK's ModInstaller, lib-free:
+        # Steam's public Workshop listing pages + the existing SteamCMD
+        # install worker). Best effort — if Steam's markup doesn't parse,
+        # Open in browser still gets you there.
+        self._ws_page = 1; self._ws_query = ""; self._ws_thread = None; self._ws_check_thread = None
+        br = QFrame(); br.setObjectName("Card")
+        bv = QVBoxLayout(br); bv.setContentsMargins(16, 12, 16, 12); bv.setSpacing(8)
+        bt = QLabel("Browse the Workshop"); bt.setObjectName("RowTitle"); bv.addWidget(bt)
+        bd = QLabel("Search Steam's public Workshop listing for ARK mods. Install uses the same SteamCMD download as the ID box above. "
+                    "If no results show, Steam may have changed its page — use Open in browser instead."); bd.setObjectName("Muted"); bd.setWordWrap(True); bv.addWidget(bd)
+        srow = FlowLayout(); srow.setSpacing(10)
+        self.ws_search_e = QLineEdit(); self.ws_search_e.setPlaceholderText("Search the Workshop, e.g. Structures Plus"); srow.addWidget(self.ws_search_e, 1)
+        s_b = QPushButton("Search"); s_b.setObjectName("Primary"); s_b.clicked.connect(lambda: self._on_workshop_search(1)); srow.addWidget(s_b)
+        ob_b = QPushButton("Open in browser"); ob_b.clicked.connect(self._on_workshop_open_browser); srow.addWidget(ob_b)
+        srow.addStretch(1); bv.addLayout(srow)
+        prow = FlowLayout(); prow.setSpacing(10)
+        self.ws_prev_b = QPushButton("← Prev"); self.ws_prev_b.setEnabled(False); self.ws_prev_b.clicked.connect(lambda: self._on_workshop_search(self._ws_page - 1)); prow.addWidget(self.ws_prev_b)
+        self.ws_page_l = QLabel(""); self.ws_page_l.setObjectName("Muted"); prow.addWidget(self.ws_page_l)
+        self.ws_next_b = QPushButton("Next →"); self.ws_next_b.setEnabled(False); self.ws_next_b.clicked.connect(lambda: self._on_workshop_search(self._ws_page + 1)); prow.addWidget(self.ws_next_b)
+        prow.addStretch(1); bv.addLayout(prow)
+        self.ws_results = QVBoxLayout(); self.ws_results.setSpacing(6)
+        bv.addLayout(self.ws_results)
+        v.addWidget(br)
+
+        # v1.67.0: mod update check (TEK's UpdateAvailable status,
+        # lib-free: Steam's time_updated vs your copy's download time).
+        self._mu_thread = None
+        mu = QFrame(); mu.setObjectName("Card")
+        mv = QVBoxLayout(mu); mv.setContentsMargins(16, 12, 16, 12); mv.setSpacing(8)
+        mt = QLabel("Mod updates"); mt.setObjectName("RowTitle"); mv.addWidget(mt)
+        md = QLabel("Compares Steam's last-updated time against when your copy was downloaded, for every mod installed in the build selected above. "
+                    "A hit means Steam's version is newer — it may have an update, so check the changelog before reinstalling."); md.setObjectName("Muted"); md.setWordWrap(True); mv.addWidget(md)
+        mu_b = QPushButton("Check for mod updates"); mu_b.setObjectName("Primary"); mu_b.clicked.connect(self._on_check_mod_updates); mv.addWidget(mu_b)
+        self.mu_results = QVBoxLayout(); self.mu_results.setSpacing(6)
+        mv.addLayout(self.mu_results)
+        v.addWidget(mu)
 
         self.status_label = QLabel(""); self.status_label.setObjectName("Muted"); self.status_label.setWordWrap(True)
         v.addWidget(self.status_label)
@@ -6384,6 +6601,176 @@ class ModsPage(QWidget):
             QMessageBox.warning(self, APP_NAME, f"Couldn't remove it: {e}")
         self.refresh()
 
+
+    def _on_install_by_id(self):
+        """v1.65.0: install any Workshop mod by ID, reusing the catalog
+        install worker (owned game only, latest mod version)."""
+        if self.worker and self.worker.isRunning():
+            return
+        wid = (self.ws_id_e.text() or "").strip()
+        if not wid.isdigit() or not is_valid_workshop_id(wid):
+            QMessageBox.warning(self, APP_NAME, "Enter a valid Workshop ID (digits only).")
+            return
+        self._install_workshop_id(wid)
+
+    def _install_workshop_id(self, wid):
+        """Shared install path for the ID box + Workshop browse results."""
+        if self.worker and self.worker.isRunning():
+            return
+        target = self._target()
+        if not target:
+            QMessageBox.information(self, APP_NAME, "Install a build on the Versions tab first, then come back.")
+            return
+        store = self.main.store
+        if not steamcmd_ready() or not (store.get("steam_username", "") or "").strip():
+            QMessageBox.information(self, APP_NAME,
+                "Mod installs need two things first:\n\n1. SteamCMD — Settings → Steam → Set up SteamCMD\n2. Your Steam username — Settings → Steam\n\n(Username only — you type the password in Steam's own window.)")
+            return
+        steam = steam_dir_for(store)
+        game_dir = game_dir_for(store, target, steam)
+        self.status_label.setText(f"Installing Workshop mod {wid} into {target.get('name', '')}...")
+        self.worker = _ModDownloadThread(wid, f"Workshop mod {wid}", game_dir,
+                                         username=store.get("steam_username", ""))
+        self.worker.progress.connect(self.status_label.setText)
+        self.worker.done.connect(self._on_installed)
+        self.worker.start()
+
+    def _on_check_by_id(self):
+        """v1.66.0: verify an ID is a real ARK mod before downloading."""
+        if self._ws_check_thread is not None and self._ws_check_thread.isRunning():
+            return
+        wid = (self.ws_id_e.text() or "").strip()
+        if not wid.isdigit() or not is_valid_workshop_id(wid):
+            QMessageBox.warning(self, APP_NAME, "Enter a valid Workshop ID (digits only).")
+            return
+        self.status_label.setText(f"Checking Workshop mod {wid}...")
+        self._ws_check_thread = _ModCheckThread(wid)
+        self._ws_check_thread.done.connect(self._on_checked_by_id)
+        self._ws_check_thread.start()
+
+    def _on_checked_by_id(self, res):
+        self._ws_check_thread = None
+        try:
+            self.ws_preview.setVisible(False)
+            preview = res.get("preview")
+            if preview:
+                pm = QPixmap()
+                if pm.loadFromData(preview) and not pm.isNull():
+                    self.ws_preview.setPixmap(pm.scaled(128, 128, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                    self.ws_preview.setVisible(True)
+        except Exception:
+            pass
+        try:
+            if res.get("error"):
+                self.status_label.setText("Couldn't verify that ID — check your connection. Install still works from the ID box.")
+            elif not res.get("found"):
+                self.status_label.setText(f"No Workshop mod with ID {res.get('wid', '')}.")
+            elif res.get("app_id") == 346110:
+                self.status_label.setText(f"ARK mod: {res.get('title', '')} ({res.get('wid', '')}) — good to install.")
+            else:
+                self.status_label.setText(f"Not an ARK mod (it's for app {res.get('app_id')}) — don't install it into ARK.")
+        except Exception:
+            self.status_label.setText("Couldn't verify that ID.")
+
+    def _on_check_mod_updates(self):
+        """v1.67.0: check installed mods in the target build for newer
+        Steam versions (TEK's UpdateAvailable, without their lib)."""
+        if self._mu_thread is not None and self._mu_thread.isRunning():
+            return
+        target = self._target()
+        if not target:
+            self.status_label.setText("No builds installed yet — download one on the Versions tab first."); return
+        mods_dir = self._mods_dir(target)
+        if mods_dir is None or not mods_dir.is_dir():
+            self.status_label.setText(f"No mods installed in {target.get('name', '')} yet."); return
+        items = []
+        try:
+            for entry in mods_dir.iterdir():
+                if entry.is_dir() and entry.name.isdigit():
+                    try: items.append((entry.name, entry.stat().st_mtime))
+                    except OSError: pass
+        except OSError:
+            items = []
+        if not items:
+            self.status_label.setText(f"No mods installed in {target.get('name', '')} yet."); return
+        self.status_label.setText(f"Checking {len(items)} installed mod(s) for updates...")
+        self._mu_thread = _ModUpdatesThread(items)
+        self._mu_thread.done.connect(self._on_mod_updates)
+        self._mu_thread.start()
+
+    def _on_mod_updates(self, updates, error):
+        self._mu_thread = None
+        while self.mu_results.count():
+            item = self.mu_results.takeAt(0)
+            w = item.widget()
+            if w is not None: w.deleteLater()
+        if error:
+            self.status_label.setText(error); return
+        if not updates:
+            self.status_label.setText("All installed mods look up to date."); return
+        self.status_label.setText(f"{len(updates)} mod(s) may have an update — check the changelog before reinstalling.")
+        for wid, title, steam_t, local_t in updates:
+            row = QFrame(); row.setObjectName("Card")
+            rv = QHBoxLayout(row); rv.setContentsMargins(12, 8, 12, 8); rv.setSpacing(10)
+            try:
+                s_date = datetime.datetime.fromtimestamp(steam_t).strftime("%Y-%m-%d")
+                l_date = datetime.datetime.fromtimestamp(local_t).strftime("%Y-%m-%d")
+            except (OSError, OverflowError, ValueError):
+                s_date = "?"; l_date = "?"
+            lab = QLabel(f"{title} — Steam updated {s_date} · yours from {l_date}"); lab.setWordWrap(True); rv.addWidget(lab, 1)
+            upd = QPushButton("Update"); upd.setObjectName("Primary")
+            upd.clicked.connect(lambda _c=False, _w=wid: self._install_workshop_id(_w))
+            rv.addWidget(upd)
+            self.mu_results.addWidget(row)
+
+    def _on_workshop_search(self, page):
+        """v1.66.0: search Steam's public Workshop listing for ARK mods."""
+        if self._ws_thread is not None and self._ws_thread.isRunning():
+            return
+        query = (self.ws_search_e.text() or "").strip()
+        if not query:
+            self.status_label.setText("Type something to search for first.")
+            return
+        page = max(1, page)
+        self._ws_query = query; self._ws_page = page
+        self.status_label.setText(f"Searching the Workshop for '{query}' (page {page})...")
+        self.ws_prev_b.setEnabled(False); self.ws_next_b.setEnabled(False)
+        self.ws_page_l.setText(f"Page {page}")
+        self._ws_thread = _WorkshopSearchThread(query, page)
+        self._ws_thread.done.connect(self._on_workshop_results)
+        self._ws_thread.start()
+
+    def _on_workshop_results(self, results, error):
+        self._ws_thread = None
+        while self.ws_results.count():
+            item = self.ws_results.takeAt(0)
+            w = item.widget()
+            if w is not None: w.deleteLater()
+        if error:
+            self.status_label.setText(error)
+        elif not results:
+            self.status_label.setText("No results — Steam may have changed its Workshop page. Try Open in browser.")
+        else:
+            self.status_label.setText(f"Found {len(results)} mod(s) — page {self._ws_page}.")
+            for wid, title in results:
+                row = QFrame(); row.setObjectName("Card")
+                rv = QHBoxLayout(row); rv.setContentsMargins(12, 8, 12, 8); rv.setSpacing(10)
+                lab = QLabel(title); lab.setWordWrap(True); rv.addWidget(lab, 1)
+                inst = QPushButton("Install"); inst.setObjectName("Primary")
+                inst.clicked.connect(lambda _c=False, _w=wid: self._install_workshop_id(_w))
+                rv.addWidget(inst)
+                op = QPushButton("Open page")
+                op.clicked.connect(lambda _c=False, _w=wid: _open_url(f"https://steamcommunity.com/sharedfiles/filedetails/?id={_w}"))
+                rv.addWidget(op)
+                self.ws_results.addWidget(row)
+        self.ws_prev_b.setEnabled(self._ws_page > 1)
+        self.ws_next_b.setEnabled(bool(results))
+
+    def _on_workshop_open_browser(self):
+        query = (self.ws_search_e.text() or "").strip()
+        url = "https://steamcommunity.com/workshop/browse/?appid=346110"
+        if query: url += "&searchtext=" + urllib.parse.quote(query)
+        _open_url(url)
 
 class BackupsPage(QWidget):
     """Saved-folder backups: one-click now, auto-backup before downloads,
@@ -7295,7 +7682,7 @@ class DetailsPanel(QFrame):
     def update_panel(self, idx):
         try:
             store = self.main.store
-            titles = ["Dashboard", "Versions", "Mods", "Host", "Backups", "Help", "Settings", "Tools"]
+            titles = ["Dashboard", "Versions", "Mods", "Game Options", "Servers", "Host", "Backups", "Help", "Settings", "Tools"]
             title = titles[idx] if 0 <= idx < len(titles) else "Legacy ARK Launcher"
             profile = store.get("active_profile", "Default") or "Default"
             versions = getattr(self.main.versions, "versions", []) or []
@@ -7320,6 +7707,8 @@ class DetailsPanel(QFrame):
                 "Help": ("How to play, download, host, and fix common problems.", [("Builds", len(versions))]),
                 "Settings": ("Profiles, theme, background, and launcher options.", [("Profile", profile), ("Theme", store.get("theme", ""))]),
                 "Tools": ("Checks, diagnostics, and maintenance for the launcher and its builds.", [("Builds", len(versions)), ("Installed", installed)]),
+                "Servers": ("Servers you added yourself — queried live, joined through Steam.", [("Servers saved", len(store.get("servers", []) or []))]),
+                "Game Options": ("Default launch arguments for ARK.", [("Profile", profile)]),
             }
             desc, facts = descs.get(title, ("Legacy ARK Launcher.", []))
             # Selected build, if Versions has one, beats the page summary.
@@ -7348,6 +7737,975 @@ class DetailsPanel(QFrame):
                     self.preview_label.setPixmapFull(_pm)
         except Exception:
             pass
+
+# ------------------------------------------------------------------ Servers (v1.65.0)
+# User-added ARK servers, queried live with Valve's public A2S_INFO
+# protocol (the same protocol Steam's own server browser uses). No
+# sponsored or community servers are listed — only servers the user adds.
+# Joining opens steam://connect in Steam, so it requires owning ARK.
+# Deliberately NOT ported from TEKLauncher: ownership bypass, TEK Steam
+# Client downloads of unowned content, skin unlocks.
+
+_ARK_MAP_NAMES = {
+    "TheIsland": "The Island", "TheCenter": "The Center",
+    "ScorchedEarth": "Scorched Earth", "Ragnarok": "Ragnarok",
+    "Aberration": "Aberration", "Extinction": "Extinction",
+    "Valguero_P": "Valguero", "Genesis": "Genesis Part 1",
+    "Gen2": "Genesis Part 2", "CrystalIsles": "Crystal Isles",
+    "LostIsland": "Lost Island", "Fjordur": "Fjordur",
+}
+
+def _read_cstr(buf, pos):
+    end = buf.find(b"\x00", pos)
+    if end < 0:
+        return "", len(buf)
+    return buf[pos:end].decode("utf-8", "replace"), end + 1
+
+def _a2s_parse_info(buf):
+    """Parse a single (reassembled) A2S_INFO response. Returns a dict or None."""
+    try:
+        if len(buf) < 6 or buf[:4] != b"\xff\xff\xff\xff" or buf[4] != 0x49:
+            return None
+        pos = 5
+        pos += 1  # protocol version
+        name, pos = _read_cstr(buf, pos)
+        map_raw, pos = _read_cstr(buf, pos)
+        _folder, pos = _read_cstr(buf, pos)
+        _game, pos = _read_cstr(buf, pos)
+        pos += 2  # app id
+        if pos + 7 > len(buf):
+            return None
+        players, maxplayers = buf[pos], buf[pos + 1]
+        pos += 7  # players, max, bots, type, env, visibility, vac
+        version, pos = _read_cstr(buf, pos)
+        if " - (v" in name:
+            base, ver = name.rsplit(" - (v", 1)
+            version = ver.rstrip(")")
+            name = base
+        return {"name": name, "map": map_raw,
+                "map_display": _ARK_MAP_NAMES.get(map_raw, map_raw),
+                "players": players, "maxplayers": maxplayers,
+                "version": version}
+    except Exception:
+        return None
+
+def _a2s_query(host, query_port, timeout=2.0):
+    """One A2S_INFO query. Returns the info dict, or None if the server
+    did not answer, refused, or sent something unparseable."""
+    try:
+        ip = socket.gethostbyname(host)
+    except OSError:
+        return None
+    req = b"\xff\xff\xff\xff\x54Source Engine Query\x00"
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        try:
+            sock.sendto(req, (ip, int(query_port)))
+            try:
+                data, _addr = sock.recvfrom(4096)
+            except OSError:
+                return None
+            if len(data) == 9 and data[:4] == b"\xff\xff\xff\xff" and data[4] == 0x41:
+                # Challenge: resend with the challenge bytes appended.
+                sock.sendto(req + data[5:9], (ip, int(query_port)))
+                try:
+                    data, _addr = sock.recvfrom(4096)
+                except OSError:
+                    return None
+            if len(data) >= 4 and data[:4] == b"\xff\xff\xff\xfe":
+                # Split packet: reassemble parts (classic format, with a
+                # size-field variant handled by length check).
+                parts = {}
+                total = None
+                buf = data
+                while buf is not None:
+                    if len(buf) < 9 or buf[:4] != b"\xff\xff\xff\xfe":
+                        break
+                    total = buf[8]
+                    num = buf[9]
+                    rest = buf[10:]
+                    if len(rest) >= 2:
+                        sz = struct.unpack_from("<H", rest, 0)[0]
+                        if sz == len(rest) - 2:
+                            rest = rest[2:]
+                    parts[num] = rest
+                    if total is not None and len(parts) >= total:
+                        break
+                    try:
+                        buf, _addr = sock.recvfrom(4096)
+                    except OSError:
+                        break
+                if total is None or len(parts) < total:
+                    return None
+                data = b"".join(parts[i] for i in sorted(parts))
+            return _a2s_parse_info(data)
+        finally:
+            sock.close()
+    except OSError:
+        return None
+
+def _lan_scan(timeout=2.5):
+    """Broadcast A2S_INFO on the LAN query port and collect replies.
+    Returns a list of {ip, query_port, info} (info may be None)."""
+    found = {}
+    req = b"\xff\xff\xff\xff\x54Source Engine Query\x00"
+    sock = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.settimeout(0.5)
+        try:
+            sock.sendto(req, ("255.255.255.255", 27015))
+        except OSError:
+            return []
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                data, addr = sock.recvfrom(4096)
+            except OSError:
+                continue
+            if len(data) > 5 and data[:4] == b"\xff\xff\xff\xff" and data[4] == 0x49:
+                found[(addr[0], addr[1])] = _a2s_parse_info(data)
+    except OSError:
+        pass
+    finally:
+        try:
+            if sock is not None:
+                sock.close()
+        except Exception:
+            pass
+    return [{"ip": ip, "query_port": port, "info": info} for (ip, port), info in sorted(found.items())]
+
+def _a2s_parse_rules(buf):
+    """Parse a single (reassembled) A2S_RULES response into {name: value}."""
+    try:
+        if len(buf) < 7 or buf[:4] != b"\xff\xff\xff\xff" or buf[4] != 0x45:
+            return None
+        count = struct.unpack_from("<h", buf, 5)[0]
+        out = {}
+        pos = 7
+        for _ in range(max(0, count)):
+            name, pos = _read_cstr(buf, pos)
+            if pos >= len(buf):
+                break
+            value, pos = _read_cstr(buf, pos)
+            if name:
+                out[name] = value
+        return out
+    except Exception:
+        return None
+
+def _a2s_query_rules(host, query_port, timeout=2.0):
+    """A2S_RULES query: returns {rule: value} or None. Same challenge +
+    split-packet handling as _a2s_query. Callers interpret only vanilla,
+    documented ARK rules (ClusterId_s, NUMOPENPUBCONN, SESSIONISPVE_i);
+    TEK's TEKWrapper gate and BattlEye gate are NOT copied — vanilla
+    servers must list."""
+    try:
+        ip = socket.gethostbyname(host)
+    except OSError:
+        return None
+    req = b"\xff\xff\xff\xff\x56\xff\xff\xff\xff"
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        try:
+            sock.sendto(req, (ip, int(query_port)))
+            try:
+                data, _addr = sock.recvfrom(4096)
+            except OSError:
+                return None
+            if len(data) == 9 and data[:4] == b"\xff\xff\xff\xff" and data[4] == 0x41:
+                sock.sendto(b"\xff\xff\xff\xff\x56" + data[5:9], (ip, int(query_port)))
+                try:
+                    data, _addr = sock.recvfrom(4096)
+                except OSError:
+                    return None
+            if len(data) >= 4 and data[:4] == b"\xff\xff\xff\xfe":
+                parts = {}
+                total = None
+                buf = data
+                while buf is not None:
+                    if len(buf) < 9 or buf[:4] != b"\xff\xff\xff\xfe":
+                        break
+                    total = buf[8]
+                    num = buf[9]
+                    rest = buf[10:]
+                    if len(rest) >= 2:
+                        sz = struct.unpack_from("<H", rest, 0)[0]
+                        if sz == len(rest) - 2:
+                            rest = rest[2:]
+                    parts[num] = rest
+                    if total is not None and len(parts) >= total:
+                        break
+                    try:
+                        buf, _addr = sock.recvfrom(4096)
+                    except OSError:
+                        break
+                if total is None or len(parts) < total:
+                    return None
+                data = b"".join(parts[i] for i in sorted(parts))
+            return _a2s_parse_rules(data)
+        finally:
+            sock.close()
+    except OSError:
+        return None
+
+def _parse_workshop_browse(html_text):
+    """Parse Steam Workshop browse HTML into [(workshop_id, title)].
+    Pairs each filedetails link with the next workshopItemTitle after
+    it (the preview link precedes the title in each item card). Best
+    effort: returns [] when the markup doesn't match, and callers fall
+    back to opening the search in the browser."""
+    out = []
+    try:
+        for m in re.finditer(r"sharedfiles/filedetails/\?id=(\d+)", html_text or ""):
+            tm = re.search(r"workshopItemTitle[^>]*>([^<]+)<", html_text[m.end():])
+            if tm:
+                title = html.unescape(tm.group(1)).strip()
+                if title:
+                    out.append((m.group(1), title))
+        seen = set(); ded = []
+        for wid, title in out:
+            if wid not in seen:
+                seen.add(wid); ded.append((wid, title))
+        return ded[:30]
+    except Exception:
+        return []
+
+def _bloom_ini_text():
+    """Scalability.ini content from TEK's FixBloom (verified in source):
+    bloom quality 1 at every post-process quality level."""
+    parts = []
+    for i in range(4):
+        parts.append(f"[PostProcessQuality@{i}]\r\nr.BloomQuality=1")
+    return "\r\n".join(parts) + "\r\n"
+
+def _mod_updates_available(local_mtimes, details):
+    """Compare local install mtimes {wid: epoch} against Steam
+    GetPublishedFileDetails entries. Returns [(wid, title, steam_time,
+    local_time)] where Steam's version is newer than the local install
+    (1h margin for clock skew and copy time). Heuristic, not proof —
+    the label says 'may have an update' for exactly this reason."""
+    out = []
+    try:
+        for d in details or []:
+            wid = str(d.get("publishedfileid", d.get("id", "")) or "")
+            try: steam_t = int(d.get("time_updated", 0) or 0)
+            except (TypeError, ValueError): continue
+            local_t = local_mtimes.get(wid)
+            if wid and steam_t and local_t is not None and steam_t > local_t + 3600:
+                out.append((wid, d.get("title", "") or wid, steam_t, local_t))
+    except Exception:
+        pass
+    return out
+
+class _ModUpdatesThread(QThread):
+    """Bulk-fetch Steam details for installed mod IDs and compare
+    timestamps. Emits (updates, error). No auth, no Steam client."""
+    done = pyqtSignal(list, str)
+
+    def __init__(self, items):
+        super().__init__(); self.items = list(items)  # [(wid, mtime)]
+
+    def run(self):
+        try:
+            fields = {"itemcount": len(self.items), "format": "json"}
+            for i, (wid, _mt) in enumerate(self.items):
+                fields[f"publishedfileids[{i}]"] = wid
+            data = urllib.parse.urlencode(fields).encode()
+            req = urllib.request.Request("https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/",
+                                         data=data, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                payload = json.loads(resp.read().decode("utf-8", "replace"))
+            details = (payload.get("response", {}) or {}).get("publishedfiledetails", []) or []
+            details = [d for d in details if str(d.get("result", "")) == "1"]
+            local = {wid: mt for wid, mt in self.items}
+            self.done.emit(_mod_updates_available(local, details), "")
+        except Exception as e:
+            self.done.emit([], f"Mod update check failed: {e}")
+
+class _WorkshopSearchThread(QThread):
+    """Fetch one page of Steam's public Workshop browse listing and
+    parse it. Emits (results, error). No auth, no Steam client."""
+    done = pyqtSignal(list, str)
+
+    def __init__(self, query, page):
+        super().__init__(); self.query = query; self.page = page
+
+    def run(self):
+        try:
+            url = ("https://steamcommunity.com/workshop/browse/?appid=346110"
+                   "&searchtext=" + urllib.parse.quote(self.query) +
+                   f"&p={self.page}")
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                html_text = resp.read().decode("utf-8", "replace")
+            self.done.emit(_parse_workshop_browse(html_text), "")
+        except Exception as e:
+            self.done.emit([], f"Workshop search failed: {e}")
+
+class _ModCheckThread(QThread):
+    """Look up one Workshop ID via Steam's public GetPublishedFileDetails
+    endpoint (no API key needed for public items). Emits a dict."""
+    done = pyqtSignal(dict)
+
+    def __init__(self, wid):
+        super().__init__(); self.wid = str(wid)
+
+    def run(self):
+        out = {"wid": self.wid, "found": False, "title": "", "app_id": None, "error": "", "preview": None}
+        try:
+            data = urllib.parse.urlencode({"itemcount": 1, "publishedfileids[0]": self.wid, "format": "json"}).encode()
+            req = urllib.request.Request("https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/",
+                                         data=data, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                payload = json.loads(resp.read().decode("utf-8", "replace"))
+            details = (payload.get("response", {}) or {}).get("publishedfiledetails", [{}])[0] or {}
+            if str(details.get("result", "")) == "1":
+                out["found"] = True
+                out["title"] = details.get("title", "") or ""
+                app = details.get("consumer_app_id") or details.get("creator_app_id")
+                try: out["app_id"] = int(app) if app is not None else None
+                except (TypeError, ValueError): out["app_id"] = None
+                # v1.67.0: preview image for TEK's ModInstaller preview pane.
+                preview_url = details.get("preview_url", "") or ""
+                if preview_url:
+                    try:
+                        preq = urllib.request.Request(preview_url, headers={"User-Agent": "Mozilla/5.0"})
+                        with urllib.request.urlopen(preq, timeout=10) as presp:
+                            out["preview"] = presp.read()
+                    except Exception:
+                        out["preview"] = None
+        except Exception:
+            out["error"] = "fetch failed"
+        self.done.emit(out)
+
+class _ServerQueryThread(QThread):
+    """Query saved servers off the GUI thread: A2S_INFO + A2S_RULES.
+    Emits {index: (info-dict-or-None, rules-dict-or-None)}."""
+    done = pyqtSignal(dict)
+
+    def __init__(self, servers):
+        super().__init__(); self.servers = list(servers)
+
+    def run(self):
+        out = {}
+        try:
+            for i, srv in enumerate(self.servers):
+                try:
+                    info = _a2s_query(srv.get("ip", ""), int(srv.get("query_port", 27015)))
+                    rules = _a2s_query_rules(srv.get("ip", ""), int(srv.get("query_port", 27015))) if info else None
+                    out[i] = (info, rules)
+                except Exception:
+                    out[i] = (None, None)
+        except Exception:
+            pass
+        self.done.emit(out)
+
+class _LanScanThread(QThread):
+    done = pyqtSignal(list)
+
+    def run(self):
+        try:
+            self.done.emit(_lan_scan())
+        except Exception:
+            self.done.emit([])
+
+class ServersPage(QWidget):
+    """User-added ARK servers: live A2S queries, join through Steam.
+    No sponsored or community servers are listed here — only servers
+    the user adds (v1.21.8 removed the sponsored Servers tab, and this
+    page does not bring it back)."""
+
+    def __init__(self, main):
+        super().__init__(); self.main = main
+        self._results = {}
+        self._rules = {}
+        self._thread = None
+        outer = QVBoxLayout(self); outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        inner = QWidget(); v = QVBoxLayout(inner)
+        v.setContentsMargins(28, 24, 28, 28); v.setSpacing(14)
+        v.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        v.addWidget(page_header("Servers",
+            "Servers you added yourself — queried live (map, players, PvE/PvP, auto-cluster), "
+            "joined through Steam or directly with one of your builds. "
+            "No sponsored or community servers are listed here."))
+        row = FlowLayout(); row.setSpacing(10)
+        add_b = QPushButton("Add server"); add_b.setObjectName("Primary"); add_b.setMinimumHeight(40); add_b.clicked.connect(self._on_add); row.addWidget(add_b)
+        self.refresh_b = QPushButton("Refresh all"); self.refresh_b.clicked.connect(self._on_refresh_all); row.addWidget(self.refresh_b)
+        scan_b = QPushButton("Scan LAN"); scan_b.clicked.connect(self._on_scan_lan); row.addWidget(scan_b)
+        row.addStretch(1); v.addLayout(row)
+        self.status_label = QLabel(""); self.status_label.setObjectName("Muted"); self.status_label.setWordWrap(True)
+        v.addWidget(self.status_label)
+        self.list_box = QVBoxLayout(); self.list_box.setSpacing(10)
+        v.addLayout(self.list_box)
+        v.addStretch(1); scroll.setWidget(inner); outer.addWidget(scroll)
+
+    def _servers(self):
+        try:
+            lst = self.main.store.get("servers", []) or []
+            return list(lst) if isinstance(lst, list) else []
+        except Exception:
+            return []
+
+    def _save(self, servers):
+        try: self.main.store.set("servers", servers)
+        except Exception: pass
+
+    def refresh(self):
+        while self.list_box.count():
+            item = self.list_box.takeAt(0)
+            w = item.widget()
+            if w is not None: w.deleteLater()
+        servers = self._servers()
+        if not servers:
+            hint = QLabel("No servers yet — hit Add server. A server needs its IP (or hostname), "
+                          "game port (usually 7777), and query port (usually 27015). "
+                          "Join opens the server in Steam — you must own ARK on Steam.")
+            hint.setObjectName("Muted"); hint.setWordWrap(True); self.list_box.addWidget(hint)
+            return
+        groups = {}
+        for i, srv in enumerate(servers):
+            # Grouping: manual cluster wins, else the server's own
+            # ClusterId_s rule (vanilla ARK cluster servers publish one),
+            # else Ungrouped. Favorites always sort first.
+            if srv.get("favorite"):
+                key = "★ Favorites"
+            elif srv.get("cluster"):
+                key = srv.get("cluster")
+            else:
+                cid = (self._rules.get(i) or {}).get("ClusterId_s", "")
+                key = cid if cid else "Ungrouped"
+            groups.setdefault(key, []).append(i)
+        order = []
+        if "★ Favorites" in groups: order.append("★ Favorites")
+        order += sorted(k for k in groups if k not in ("★ Favorites", "Ungrouped"))
+        if "Ungrouped" in groups: order.append("Ungrouped")
+        for gname in order:
+            h = QLabel(gname); h.setObjectName("SectionHeader"); self.list_box.addWidget(h)
+            for i in groups[gname]:
+                self.list_box.addWidget(self._card(i, servers[i]))
+        # First open with saved servers and no results yet: query in background.
+        if not self._results and (self._thread is None or not self._thread.isRunning()):
+            self._on_refresh_all()
+
+    def _card(self, i, srv):
+        card = QFrame(); card.setObjectName("Card")
+        v = QVBoxLayout(card); v.setContentsMargins(16, 12, 16, 12); v.setSpacing(6)
+        res = self._results.get(i, "pending")
+        rules = self._rules.get(i) or {}
+        name = (srv.get("name") or "").strip()
+        addr = f"{srv.get('ip', '')}:{srv.get('game_port', 7777)}"
+        if res == "pending":
+            title = name or addr; info = f"{addr} • Not queried yet"
+        elif res is None:
+            title = name or addr; info = f"{addr} • No reply (offline or unreachable)"
+        else:
+            title = res.get("name") or name or addr
+            players = res.get("players", 0); maxplayers = res.get("maxplayers", 0)
+            # NUMOPENPUBCONN is the true open-slots count; ARK's INFO
+            # player field is often wrong, so prefer it when present.
+            try:
+                open_slots = int(rules.get("NUMOPENPUBCONN", ""))
+                players = max(0, maxplayers - open_slots)
+            except (TypeError, ValueError):
+                pass
+            info = f"{res.get('map_display', '')} • {players}/{maxplayers} players"
+            if rules.get("SESSIONISPVE_i") == "1": info += " • PvE"
+            elif rules.get("SESSIONISPVE_i") == "0": info += " • PvP"
+            if res.get("version"): info += f" • {res['version']}"
+            info += f" • {addr}"
+        t = QLabel(title); t.setObjectName("RowTitle"); v.addWidget(t)
+        s = QLabel(info); s.setObjectName("Muted"); s.setWordWrap(True); v.addWidget(s)
+        # v1.67.0: manual version of TEK's cluster info (hoster/Discord/
+        # description) — a note and Discord link the user typed when
+        # adding the server.
+        if (srv.get("note") or "").strip():
+            n = QLabel(srv.get("note").strip()); n.setObjectName("Muted"); n.setWordWrap(True); v.addWidget(n)
+        brow = FlowLayout(); brow.setSpacing(10)
+        join_b = QPushButton("Join"); join_b.setObjectName("Primary"); join_b.clicked.connect(lambda _c=False, _s=srv: self._on_join(_s)); brow.addWidget(join_b)
+        jwb_b = QPushButton("Join with build"); jwb_b.clicked.connect(lambda _c=False, _s=srv: self._on_join_with_build(_s)); brow.addWidget(jwb_b)
+        if (srv.get("discord") or "").strip():
+            dc_b = QPushButton("Discord"); dc_b.clicked.connect(lambda _c=False, _u=srv.get("discord").strip(): _open_url(_u)); brow.addWidget(dc_b)
+        ref_b = QPushButton("Refresh"); ref_b.clicked.connect(lambda _c=False, _i=i: self._on_refresh_one(_i)); brow.addWidget(ref_b)
+        cp_b = QPushButton("Copy address"); cp_b.clicked.connect(lambda _c=False, _s=srv: self._on_copy(_s)); brow.addWidget(cp_b)
+        fav_b = QPushButton("★ Unfavorite" if srv.get("favorite") else "☆ Favorite"); fav_b.clicked.connect(lambda _c=False, _i=i: self._on_favorite(_i)); brow.addWidget(fav_b)
+        rm_b = QPushButton("Remove"); rm_b.clicked.connect(lambda _c=False, _i=i: self._on_remove(_i)); brow.addWidget(rm_b)
+        brow.addStretch(1); v.addLayout(brow)
+        return card
+
+    def _on_add(self):
+        dlg = QDialog(self); dlg.setWindowTitle("Add server")
+        form = QFormLayout(dlg)
+        name_e = QLineEdit(); name_e.setPlaceholderText("Optional — filled from the query")
+        ip_e = QLineEdit(); ip_e.setPlaceholderText("IP or hostname, e.g. 192.168.1.10")
+        game_e = QSpinBox(); game_e.setRange(1, 65535); game_e.setValue(7777)
+        query_e = QSpinBox(); query_e.setRange(1, 65535); query_e.setValue(27015)
+        cluster_e = QLineEdit(); cluster_e.setPlaceholderText("Optional group name")
+        note_e = QLineEdit(); note_e.setPlaceholderText("Optional note, e.g. CML OG Ark — 2015 rates")
+        discord_e = QLineEdit(); discord_e.setPlaceholderText("Optional Discord invite link")
+        fav_cb = QCheckBox("Favorite")
+        form.addRow("Name:", name_e); form.addRow("Address:", ip_e)
+        form.addRow("Game port:", game_e); form.addRow("Query port:", query_e)
+        form.addRow("Cluster:", cluster_e); form.addRow("Note:", note_e); form.addRow("Discord:", discord_e); form.addRow("", fav_cb)
+        brow = QHBoxLayout(); ok_b = QPushButton("Add"); ok_b.setObjectName("Primary"); cancel_b = QPushButton("Cancel")
+        brow.addStretch(1); brow.addWidget(ok_b); brow.addWidget(cancel_b); form.addRow(brow)
+        ok_b.clicked.connect(dlg.accept); cancel_b.clicked.connect(dlg.reject)
+        if dlg.exec() != QDialog.DialogCode.Accepted: return
+        ip = ip_e.text().strip()
+        if not ip:
+            QMessageBox.warning(self, APP_NAME, "Enter an IP or hostname."); return
+        servers = self._servers()
+        servers.append({"name": name_e.text().strip(), "ip": ip,
+                        "game_port": int(game_e.value()), "query_port": int(query_e.value()),
+                        "cluster": cluster_e.text().strip(), "favorite": bool(fav_cb.isChecked()),
+                        "note": note_e.text().strip(), "discord": discord_e.text().strip()})
+        self._save(servers); self.status_label.setText(f"Added {ip}."); self.refresh()
+
+    def _on_refresh_all(self):
+        if self._thread is not None and self._thread.isRunning():
+            return
+        servers = self._servers()
+        if not servers: return
+        self.status_label.setText("Querying servers…")
+        try: self.refresh_b.setEnabled(False)
+        except Exception: pass
+        self._thread = _ServerQueryThread(servers)
+        self._thread.done.connect(self._on_queried)
+        self._thread.start()
+
+    def _on_queried(self, results):
+        self._thread = None
+        try: self.refresh_b.setEnabled(True)
+        except Exception: pass
+        try:
+            for k, val in (results or {}).items():
+                info, rules = val if isinstance(val, tuple) else (val, None)
+                if info is None:
+                    self._results[int(k)] = None
+                    self._rules.pop(int(k), None)  # offline: drop stale rules
+                else:
+                    self._results[int(k)] = info
+                    if rules is not None: self._rules[int(k)] = rules
+        except Exception: pass
+        servers = self._servers()
+        online = sum(1 for v in self._results.values() if v)
+        self.status_label.setText(f"{online} of {len(servers)} server(s) online.")
+        self.refresh()
+
+    def _on_refresh_one(self, i):
+        if self._thread is not None and self._thread.isRunning():
+            self.status_label.setText("Already querying — wait for it to finish."); return
+        servers = self._servers()
+        if not (0 <= i < len(servers)): return
+        self._thread = _ServerQueryThread([servers[i]])
+        self._thread.done.connect(lambda res, _i=i: self._on_queried_one(_i, res))
+        self._thread.start()
+
+    def _on_queried_one(self, i, results):
+        self._thread = None
+        try:
+            if results and 0 in results:
+                info, rules = results[0] if isinstance(results[0], tuple) else (results[0], None)
+                if info is None:
+                    self._results[i] = None
+                    self._rules.pop(i, None)
+                else:
+                    self._results[i] = info
+                    if rules is not None: self._rules[i] = rules
+        except Exception: pass
+        self.refresh()
+
+    def _on_join(self, srv):
+        try:
+            if _open_url(f"steam://connect/{srv.get('ip', '')}:{srv.get('game_port', 7777)}"):
+                self.main.set_status(f"Opening Steam to join {srv.get('ip', '')} — you must own ARK on Steam.")
+            else:
+                self.main.set_status("Couldn't open Steam — is Steam installed?")
+        except Exception: pass
+
+    def _on_join_with_build(self, srv):
+        """TEK-style direct join: pick an installed timecapsule build and
+        launch its exe with +connect, instead of Steam's current install."""
+        try:
+            steam = steam_dir_for(self.main.store)
+        except Exception:
+            steam = None
+        builds = []
+        try:
+            for v in (self.main.versions.versions or []):
+                exe = game_exe_for(steam, v, self.main.store) if steam else None
+                if exe and Path(exe).is_file():
+                    builds.append(v)
+        except Exception:
+            builds = []
+        if not builds:
+            QMessageBox.information(self, APP_NAME, "No builds installed yet — download a build on the Versions tab first, then join with it.")
+            return
+        dlg = QDialog(self); dlg.setWindowTitle("Join with build")
+        v = QVBoxLayout(dlg)
+        lab = QLabel(f"Join {srv.get('ip', '')}:{srv.get('game_port', 7777)} with which installed build?")
+        lab.setWordWrap(True); v.addWidget(lab)
+        combo = QComboBox()
+        for b in builds: combo.addItem(b.get("name", ""))
+        try:
+            cur = self.main.versions.selected
+            if cur is not None: combo.setCurrentText(cur.get("name", ""))
+        except Exception: pass
+        v.addWidget(combo)
+        brow = QHBoxLayout(); ok_b = QPushButton("Join"); ok_b.setObjectName("Primary"); cancel_b = QPushButton("Cancel")
+        brow.addStretch(1); brow.addWidget(ok_b); brow.addWidget(cancel_b); v.addLayout(brow)
+        ok_b.clicked.connect(dlg.accept); cancel_b.clicked.connect(dlg.reject)
+        if dlg.exec() != QDialog.DialogCode.Accepted: return
+        if not combo.count(): return
+        self._launch_join(builds[combo.currentIndex()], srv)
+
+    def _launch_join(self, build, srv):
+        """Direct exe launch with +connect. Mirrors VersionsPage's Play
+        preflight (steam_appid repair, Steam must be running) but skips
+        the desktop shortcut so join args never pollute the Play shortcut."""
+        try:
+            steam = steam_dir_for(self.main.store)
+            exe = game_exe_for(steam, build, self.main.store) if steam else None
+        except Exception:
+            exe = None
+        if not exe or not Path(exe).is_file():
+            QMessageBox.warning(self, APP_NAME, "That build isn't installed anymore."); return
+        try:
+            appid = Path(exe).parent / "steam_appid.txt"
+            if not appid.is_file(): appid.write_text(str(STEAM_APP_ID))
+        except OSError: pass
+        try:
+            running = subprocess.run(["tasklist", "/FI", "IMAGENAME eq steam.exe"],
+                                     capture_output=True, text=True, timeout=15,
+                                     creationflags=_hidden_flags())
+            steam_up = "steam.exe" in (running.stdout or "").lower()
+        except (OSError, subprocess.SubprocessError):
+            steam_up = True  # can't check — don't block the launch
+        if not steam_up and steam:
+            try:
+                subprocess.Popen([str(Path(steam) / "steam.exe")])
+                self.status_label.setText("Starting Steam so the game can verify ownership...")
+                time.sleep(10)
+            except OSError:
+                QMessageBox.warning(self, APP_NAME, "Steam isn't running — open Steam first, then join."); return
+        profiles = self.main.store.get("launch_profiles", {}) or {}
+        args_str = ((profiles.get(build.get("name", ""), "") or "").strip()
+                    or self.main.store.get("launch_args", "").strip())
+        culture = (self.main.store.get("game_culture", "") or "").strip()
+        if culture and "-culture" not in args_str:
+            args_str = (args_str + f" -culture={culture}").strip()
+        cmd = [str(exe)]
+        if args_str: cmd.extend(args_str.split())
+        cmd += ["+connect", f"{srv.get('ip', '')}:{srv.get('game_port', 7777)}"]
+        try:
+            subprocess.Popen(cmd, cwd=str(Path(exe).parent))
+            self.status_label.setText(f"Joining {srv.get('ip', '')} with {build.get('name', '')}...")
+            try:
+                if self.main.store.get("discord_rich_presence"):
+                    discord_set_playing(self.main.store.get("discord_client_id", ""), build.get("name", ""))
+            except Exception: pass
+            if self.main.store.get("close_on_launch"):
+                try: self.main.close()
+                except Exception: pass
+        except OSError as e:
+            QMessageBox.warning(self, APP_NAME, f"Couldn't launch the game: {e}")
+
+    def _on_copy(self, srv):
+        try:
+            _copy_text(f"{srv.get('ip', '')}:{srv.get('game_port', 7777)}")
+            self.status_label.setText("Copied server address.")
+        except Exception: pass
+
+    def _on_remove(self, i):
+        servers = self._servers()
+        if 0 <= i < len(servers):
+            servers.pop(i); self._save(servers)
+            nr = {}; nru = {}
+            for k, val in self._results.items():
+                if k < i: nr[k] = val
+                elif k > i: nr[k - 1] = val
+            for k, val in self._rules.items():
+                if k < i: nru[k] = val
+                elif k > i: nru[k - 1] = val
+            self._results = nr; self._rules = nru
+            self.status_label.setText("Server removed."); self.refresh()
+
+    def _on_favorite(self, i):
+        servers = self._servers()
+        if 0 <= i < len(servers):
+            servers[i]["favorite"] = not servers[i].get("favorite")
+            self._save(servers); self.refresh()
+
+    def _on_scan_lan(self):
+        if self._thread is not None and self._thread.isRunning():
+            self.status_label.setText("Already querying — wait for it to finish."); return
+        self.status_label.setText("Scanning the LAN for ARK servers…")
+        self._thread = _LanScanThread(); self._thread.done.connect(self._on_lan_found); self._thread.start()
+
+    def _on_lan_found(self, found):
+        self._thread = None
+        servers = self._servers()
+        known = {(s.get("ip", ""), int(s.get("query_port", 27015))) for s in servers}
+        new = [f for f in found if (f["ip"], f["query_port"]) not in known]
+        if not new:
+            self.status_label.setText("No new LAN servers found."); return
+        dlg = QDialog(self); dlg.setWindowTitle("LAN servers found")
+        v = QVBoxLayout(dlg)
+        checks = []
+        for f in new:
+            info = f.get("info") or {}
+            label = (info.get("name") or f["ip"]) + f"  ({f['ip']}:{f['query_port']})"
+            cb = QCheckBox(label); cb.setChecked(True); v.addWidget(cb); checks.append((cb, f))
+        brow = QHBoxLayout(); ok_b = QPushButton("Add selected"); ok_b.setObjectName("Primary"); cancel_b = QPushButton("Cancel")
+        brow.addStretch(1); brow.addWidget(ok_b); brow.addWidget(cancel_b); v.addLayout(brow)
+        ok_b.clicked.connect(dlg.accept); cancel_b.clicked.connect(dlg.reject)
+        if dlg.exec() != QDialog.DialogCode.Accepted: return
+        added = 0
+        for cb, f in checks:
+            if not cb.isChecked(): continue
+            info = f.get("info") or {}
+            servers.append({"name": info.get("name", ""), "ip": f["ip"],
+                            "game_port": 7777, "query_port": f["query_port"],
+                            "cluster": "LAN", "favorite": False})
+            added += 1
+        self._save(servers); self.status_label.setText(f"Added {added} LAN server(s)."); self.refresh()
+        # Fresh servers have no results yet — query everything now so the
+        # new ones show live data instead of "Not queried yet".
+        self._on_refresh_all()
+
+class GameOptionsPage(QWidget):
+    """Launch arguments as checkboxes plus a free-text field, editing
+    the same store keys the Settings tab uses (launch_args and
+    launch_arg_presets). Mirrors TEKLauncher's GameOptions tab.
+    Per-build args can still be set on the Versions tab."""
+
+    _FLAGS = [
+        ("-sm4", "Shader Model 4 — simpler shaders, big FPS gain on weak GPUs."),
+        ("-lowmemory", "Low memory mode — reduces RAM use."),
+        ("-nomansky", "Disables the sky — fewer effects, more FPS."),
+        ("-windowed", "Run in a window instead of fullscreen."),
+        ("-high", "High CPU priority for the game (do not combine with -low)."),
+        ("-nosound", "Disables sound — last resort FPS gain."),
+        ("-d3d10", "DirectX 10 path — helps very old GPUs that choke on DX11."),
+        ("-nosplash", "Skip the splash screens on launch."),
+        ("-nomemorybias", "Disables the game's memory bias."),
+        ("-norhithread", "Disables the render thread — can fix stutter on some PCs."),
+        ("-novsync", "Disables VSync — uncaps the frame rate."),
+        ("-preventhibernation", "Keeps creatures active in single-player (no dino hibernation)."),
+    ]
+
+    # TEK's game-language list (display name, -culture= code).
+    _CULTURES = [
+        ("Steam default", ""), ("Català", "ca"), ("Český", "cs"), ("Dansk", "da"),
+        ("Deutsch", "de"), ("English", "en"), ("Español", "es"), ("Euskara", "eu"),
+        ("Suomi", "fi"), ("Français", "fr"), ("Magyar", "hu"), ("Italiano", "it"),
+        ("日本語", "ja"), ("ქართული", "ka"), ("한국어", "ko"), ("Nederlands", "nl"),
+        ("Polski", "pl"), ("Português/Brasil", "pt_BR"), ("Русский", "ru"),
+        ("Svenska", "sv"), ("ภาษาไทย", "th"), ("Türkçe", "tr"), ("Українська", "uk"),
+        ("中文", "zh"), ("中文 (简体)", "zh-Hans-CN"), ("中文 (台湾)", "zh-TW"),
+    ]
+
+    def __init__(self, main):
+        super().__init__(); self.main = main
+        self._syncing = False
+        outer = QVBoxLayout(self); outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        inner = QWidget(); v = QVBoxLayout(inner)
+        v.setContentsMargins(28, 24, 28, 28); v.setSpacing(14)
+        v.setAlignment(Qt.AlignmentFlag.AlignTop)
+        v.addWidget(page_header("Game Options",
+            "Default launch arguments for ARK. These are the same arguments "
+            "the Settings tab edits, and per-build args can still be set on "
+            "the Versions tab."))
+        self.text = QLineEdit(); self.text.setPlaceholderText("e.g. -sm4 -lowmemory")
+        self.text.editingFinished.connect(self._on_text_committed)
+        v.addWidget(self.text)
+        self.checks = {}
+        for flag, desc in self._FLAGS:
+            card = QFrame(); card.setObjectName("Card")
+            cv = QVBoxLayout(card); cv.setContentsMargins(16, 12, 16, 12); cv.setSpacing(4)
+            cb = QCheckBox(flag); cb.toggled.connect(lambda _c=False, _f=flag: self._on_flag(_f))
+            cv.addWidget(cb)
+            d = QLabel(desc); d.setObjectName("Muted"); d.setWordWrap(True); cv.addWidget(d)
+            self.checks[flag] = cb
+            v.addWidget(card)
+        prow = FlowLayout(); prow.setSpacing(10)
+        for pname in ("High FPS", "Balanced", "Windowed", "Pretty"):
+            b = QPushButton(pname); b.clicked.connect(lambda _c=False, _p=pname: self._on_preset(_p)); prow.addWidget(b)
+        prow.addStretch(1); v.addLayout(prow)
+        srow = FlowLayout(); srow.setSpacing(10)
+        self.name_e = QLineEdit(); self.name_e.setPlaceholderText("Preset name"); srow.addWidget(self.name_e, 1)
+        sb = QPushButton("Save current as preset"); sb.setObjectName("Primary"); sb.clicked.connect(self._on_save_preset); srow.addWidget(sb)
+        srow.addStretch(1); v.addLayout(srow)
+        # v1.66.0: game language (-culture=, TEK's Play-tab dropdown) and
+        # close-on-launch (TEK's launcher setting). Language defaults to
+        # Steam default (no flag) so nobody's language changes unasked.
+        lrow = FlowLayout(); lrow.setSpacing(10)
+        lrow.addWidget(QLabel("Game language:"))
+        self.lang_combo = QComboBox()
+        for disp, code in self._CULTURES:
+            self.lang_combo.addItem(disp, code)
+        self.lang_combo.currentIndexChanged.connect(self._on_language_changed)
+        lrow.addWidget(self.lang_combo, 1)
+        lrow.addStretch(1); v.addLayout(lrow)
+        self.close_cb = QCheckBox("Close the launcher when the game launches")
+        self.close_cb.toggled.connect(self._on_close_toggled)
+        v.addWidget(self.close_cb)
+        fb = QPushButton("Fix bloom (writes Scalability.ini for the selected build)")
+        fb.clicked.connect(self._on_fix_bloom); v.addWidget(fb)
+        self.status_label = QLabel(""); self.status_label.setObjectName("Muted"); self.status_label.setWordWrap(True)
+        v.addWidget(self.status_label)
+        v.addStretch(1); scroll.setWidget(inner); outer.addWidget(scroll)
+
+    def _args(self):
+        try: return (self.main.store.get("launch_args", "") or "").split()
+        except Exception: return []
+
+    def refresh(self):
+        args = set(self._args())
+        self._syncing = True
+        try:
+            self.text.setText(self.main.store.get("launch_args", "") or "")
+            for flag, cb in self.checks.items():
+                cb.blockSignals(True); cb.setChecked(flag in args); cb.blockSignals(False)
+            culture = (self.main.store.get("game_culture", "") or "")
+            self.lang_combo.blockSignals(True)
+            idx = self.lang_combo.findData(culture)
+            self.lang_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            self.lang_combo.blockSignals(False)
+            self.close_cb.blockSignals(True)
+            self.close_cb.setChecked(bool(self.main.store.get("close_on_launch", False)))
+            self.close_cb.blockSignals(False)
+        finally:
+            self._syncing = False
+
+    def _on_flag(self, flag):
+        if self._syncing: return
+        args = self._args()
+        if self.checks[flag].isChecked():
+            if flag not in args: args.append(flag)
+        else:
+            args = [a for a in args if a != flag]
+        self.main.store.set("launch_args", " ".join(args))
+        self._syncing = True
+        try: self.text.setText(" ".join(args))
+        finally: self._syncing = False
+
+    def _on_text_committed(self):
+        if self._syncing: return
+        self.main.store.set("launch_args", self.text.text())
+        self.refresh()
+
+    def _on_preset(self, pname):
+        presets = self.main.store.get("launch_arg_presets", {}) or {}
+        if pname in presets:
+            self.main.store.set("launch_args", presets[pname]); self.refresh()
+            self.status_label.setText(f"Preset '{pname}' applied.")
+
+    def _on_save_preset(self):
+        name = (self.name_e.text() or "").strip()
+        if not name:
+            QMessageBox.warning(self, APP_NAME, "Type a name for the preset first."); return
+        presets = dict(self.main.store.get("launch_arg_presets", {}) or {})
+        presets[name] = self.main.store.get("launch_args", "") or ""
+        self.main.store.set("launch_arg_presets", presets)
+        self.status_label.setText(f"Preset '{name}' saved.")
+
+    def _on_language_changed(self, _idx):
+        if self._syncing: return
+        try: self.main.store.set("game_culture", self.lang_combo.currentData() or "")
+        except Exception: pass
+
+    def _on_close_toggled(self, checked):
+        if self._syncing: return
+        try: self.main.store.set("close_on_launch", bool(checked))
+        except Exception: pass
+
+    def _on_fix_bloom(self):
+        """TEK's FixBloom, verified in source: write Scalability.ini with
+        r.BloomQuality=1 at every post-process quality level, into the
+        selected build. Refuses while the game runs (it would overwrite
+        the file on exit)."""
+        try:
+            sel = self.main.versions.selected
+        except Exception:
+            sel = None
+        if sel is None:
+            QMessageBox.information(self, APP_NAME, "Pick a build on the Versions tab first."); return
+        try:
+            steam = steam_dir_for(self.main.store)
+            game_dir = game_dir_for(self.main.store, sel, steam) if steam else None
+        except Exception:
+            game_dir = None
+        if not game_dir or not Path(game_dir).is_dir():
+            QMessageBox.information(self, APP_NAME, "That build isn't installed yet — download it first."); return
+        try:
+            running = subprocess.run(["tasklist", "/FI", "IMAGENAME eq ShooterGame.exe"],
+                                     capture_output=True, text=True, timeout=15,
+                                     creationflags=_hidden_flags())
+            if "ShooterGame.exe" in (running.stdout or ""):
+                QMessageBox.warning(self, APP_NAME, "Close the game first — it would overwrite this file on exit."); return
+        except (OSError, subprocess.SubprocessError):
+            pass  # can't check — proceed
+        ini_path = Path(game_dir) / "ShooterGame" / "Saved" / "Config" / "WindowsNoEditor" / "Scalability.ini"
+        try:
+            ini_path.parent.mkdir(parents=True, exist_ok=True)
+            ini_path.write_text(_bloom_ini_text())
+            self.status_label.setText(f"Bloom fix written for {sel.get('name', '')}.")
+        except OSError as e:
+            QMessageBox.warning(self, APP_NAME, f"Couldn't write the bloom fix: {e}")
+
+def _fetch_active_users():
+    """v1.71.0: read the public counter total; '—' on any failure
+    (including 404 for a fresh key with no pings yet, bad JSON, or a
+    missing value). Pure read, no data sent."""
+    try:
+        req = urllib.request.Request(PUBLIC_PING_GET, headers={"User-Agent": "LegacyARKLauncher/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+        value = data.get("value")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return "—"
+        return f"{int(value):,}"
+    except Exception:
+        return "—"
+
+class _ActiveUsersThread(QThread):
+    """v1.71.0: fetch the header total off the UI thread; the result
+    signal is what touches the label (Qt queued connection)."""
+    result = pyqtSignal(str)
+    def run(self):
+        try: self.result.emit(_fetch_active_users())
+        except Exception:
+            try: self.result.emit("—")
+            except Exception: pass
+
+class _UsagePingThread(QThread):
+    """v1.71.2: send both usage pings off the UI thread and report
+    whether either one succeeded. Detached (no parent) like the header
+    fetch thread, so closing the window mid-ping can't destroy a
+    running thread; finished -> deleteLater. The done signal is what
+    marks the day (on the UI thread) — no store writes off it."""
+    done = pyqtSignal(bool)
+    def run(self):
+        ok = False
+        try:
+            if _send_usage_ping(VERSION):
+                ok = True
+        except Exception:
+            pass
+        try:
+            if _send_public_ping():
+                ok = True
+        except Exception:
+            pass
+        try: self.done.emit(ok)
+        except Exception: pass
 
 class MainWindow(QMainWindow):
     def __init__(self, store):
@@ -7379,8 +8737,8 @@ class MainWindow(QMainWindow):
         # bar. Top nav from v1.31-v1.38 is gone — it was never his look.
         self.nav_group = QButtonGroup(self); self.nav_group.setExclusive(True)
         self.pages = QStackedWidget()
-        self.dashboard = DashboardPage(self); self.versions = VersionsPage(self); self.mods = ModsPage(self); self.host = HostPage(self); self.backups = BackupsPage(self); self.help = HelpPage(self); self.settings = SettingsPage(self); self.tools = ToolsPage(self)
-        for pg in (self.dashboard, self.versions, self.mods, self.host, self.backups, self.help, self.settings, self.tools): self.pages.addWidget(pg)
+        self.dashboard = DashboardPage(self); self.versions = VersionsPage(self); self.mods = ModsPage(self); self.gameoptions = GameOptionsPage(self); self.servers = ServersPage(self); self.host = HostPage(self); self.backups = BackupsPage(self); self.help = HelpPage(self); self.settings = SettingsPage(self); self.tools = ToolsPage(self)
+        for pg in (self.dashboard, self.versions, self.mods, self.gameoptions, self.servers, self.host, self.backups, self.help, self.settings, self.tools): self.pages.addWidget(pg)
         # v1.43.0 text-wrap on resize, all tabs: no horizontal scrolling in any
         # page scroll area. Vertical scroll still works. Inner widgets then
         # follow the viewport width, so WordWrap paragraphs re-wrap when the
@@ -7388,7 +8746,7 @@ class MainWindow(QMainWindow):
         try:
             # NOTE: self.pages is not attached to MainWindow yet here, so
             # self.findChildren would miss every page scroll area. Search
-            # from self.pages, which already owns all 8 pages.
+            # from self.pages, which already owns all pages.
             for _sa in self.pages.findChildren(QScrollArea):
                 _sa.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
                 _sa.setWidgetResizable(True)
@@ -7419,8 +8777,20 @@ class MainWindow(QMainWindow):
         sv.addSpacing(8)
         self.nav_buttons = []
         self._nav_index = {}
-        for i, (ic, label) in enumerate([("dashboard", "Dashboard"), ("box", "Versions"), ("plus", "Mods"), ("monitor", "Host"), ("save", "Backups"), ("help", "Help"), ("gear", "Settings"), ("search", "Tools")]):
-            b = NavButton(ic, label); b.setFixedHeight(46); b.setToolTip(f"{label} (Ctrl+{i+1})"); self.nav_group.addButton(b, i); self.nav_buttons.append(b); sv.addWidget(b); self._nav_index[label] = i
+        # v1.67.0: sidebar sections — one flat list of 11 was a junk
+        # drawer. Order here MUST match the pages tuple above and the
+        # update_panel titles list, because nav ids are page indices.
+        _nav_sections = [
+            ("Play", [("dashboard", "Dashboard"), ("box", "Versions"), ("plus", "Mods"), ("code", "Game Options")]),
+            ("Servers", [("users", "Servers"), ("monitor", "Host")]),
+            ("Launcher", [("save", "Backups"), ("help", "Help"), ("gear", "Settings"), ("search", "Tools")]),
+        ]
+        _i = 0
+        for _sec, _items in _nav_sections:
+            if _i > 0: sv.addSpacing(10)
+            _h = QLabel(_sec.upper()); _h.setObjectName("SectionHeader"); sv.addWidget(_h)
+            for ic, label in _items:
+                b = NavButton(ic, label); b.setFixedHeight(46); b.setToolTip(f"{label} (Ctrl+{_i+1})" if _i < 8 else label); self.nav_group.addButton(b, _i); self.nav_buttons.append(b); sv.addWidget(b); self._nav_index[label] = _i; _i += 1
         self.nav_group.idClicked.connect(self.show_page); self.nav_buttons[0].setChecked(True)
         sv.addStretch(1)
         # His version pill: height 24, radius 12, quiet dark pill at sidebar bottom
@@ -7514,6 +8884,21 @@ class MainWindow(QMainWindow):
         # blind 1360x860, so a small monitor still fits (its starting size
         # is already clamped to that monitor in _clamp_to_screen).
         self.refresh_all(); _dump_windows("init-refresh-done"); self._ready = True
+        self._maybe_usage_ping()
+        # v1.71.0: header Active users — first fetch now, then every 60s.
+        try:
+            self._au_timer = QTimer(self)
+            self._au_timer.timeout.connect(self._refresh_active_users)
+            self._au_timer.start(60000)
+            self._refresh_active_users()
+        except Exception:
+            pass
+        # v1.65.0: What's New, once per version.
+        try:
+            if (store.get("last_seen_version", "") or "") != VERSION:
+                QTimer.singleShot(1500, self._show_whats_new)
+        except Exception:
+            pass
         self._painted_once = False
         self._setup_shortcuts()
         # System tray: minimize-to-tray + startup tab.
@@ -7772,6 +9157,92 @@ class MainWindow(QMainWindow):
             if s.get("window_size_autosave") and self.width() >= 900 and self.height() >= 600:
                 s["window_size"] = [self.width(), self.height()]; self.store.save()
 
+    def _refresh_active_users(self):
+        """v1.71.0: start a header-total fetch unless one is already
+        running. Never raises into startup or the timer."""
+        try:
+            t = getattr(self, "_au_thread", None)
+            if t is not None and t.isRunning():
+                return
+            # v1.71.1: no parent — a parented QThread deleted with the
+            # window while a fetch is still running warns (and can
+            # crash on exit); detached, it finishes on its own and
+            # cleans itself up, and the ref clears on finish so the
+            # next refresh can start a new one.
+            t = _ActiveUsersThread()
+            t.result.connect(self._on_active_users)
+            t.finished.connect(lambda: setattr(self, "_au_thread", None))
+            t.finished.connect(t.deleteLater)
+            self._au_thread = t
+            t.start()
+        except Exception:
+            pass
+
+    def _on_active_users(self, text):
+        try:
+            self.titlebar.active_users_label.setText(f"Active users: {text}")
+        except Exception:
+            pass
+
+    def _maybe_usage_ping(self):
+        """v1.71.2: anonymous usage ping, OFF by default. When the
+        Settings toggle is on, send at most one SUCCESSFUL ping per day
+        to TWO places, both carrying ONLY the launcher version (no
+        username, no game data, no body): the project site (per-version
+        counts in the private Netlify dashboard) and the public counter
+        (the live total the website shows as Active users). v1.71.1
+        marked the day BEFORE sending, so a silently failed ping burned
+        the whole day and the counter stayed empty with no error shown
+        — that is what stranded his first attempt. Now the day is
+        marked only when a send succeeds (via the thread's done signal,
+        on the UI thread — no store writes off it), so a failed ping
+        retries on the next launch or toggle flip. The gate key is new
+        (usage_ping_success_day): old usage_ping_last_day marks are
+        unproven — written before success-tracking — so they must not
+        block a retry. A ping already in flight is not duplicated.
+        Never raises into startup."""
+        try:
+            if not self.store.get("usage_ping"):
+                return
+            today = datetime.date.today().isoformat()
+            if (self.store.get("usage_ping_success_day", "") or "") == today:
+                return
+            t = getattr(self, "_ping_thread", None)
+            if t is not None and t.isRunning():
+                return
+            t = _UsagePingThread()
+            t.done.connect(self._on_usage_ping_done)
+            t.finished.connect(t.deleteLater)
+            self._ping_thread = t
+            t.start()
+        except Exception:
+            pass
+
+    def _on_usage_ping_done(self, ok):
+        try:
+            self._ping_thread = None
+        except Exception:
+            pass
+        try:
+            if ok:
+                self.store.set("usage_ping_success_day", datetime.date.today().isoformat())
+        except Exception:
+            pass
+
+    def _show_whats_new(self):
+        """v1.65.0: one-time What's New dialog for this version."""
+        try:
+            QMessageBox.information(self, f"What's new in {VERSION}",
+                "• Usage ping fix: a failed ping no longer burns the day — the day counts only once a ping actually lands, so a blocked first try retries on your next launch instead of leaving the counter empty until tomorrow. Your first v1.71.2 launch retries right away.\n"
+                "• Splash corners fixed: the loading screen is a true rounded pill now — the square pixmap corners no longer poke past the curve.\n"
+                "• Active users in the header: the live total from the public counter now sits next to the title, refreshed every minute (dash if it can't be reached).\n"
+                "• Loading screen restored: the branded LEGACY ARK Loading... splash is back while the UI builds — it was removed while the window-flashing bugs were still live, and those are fixed now.\n"
+                "• Usage counting (from v1.69/70, folded in here): opt-in, off by default — one anonymous ping per day, version only, feeding the public total and the private per-version counts.\n"
+                "• Download fix (from v1.68, folded in here): depot folders left over from another build no longer inflate the size number or mix newer files into your install — mismatched folders are wiped before downloading, same-build partials still resume.")
+            self.store.set("last_seen_version", VERSION)
+        except Exception:
+            pass
+
     def set_status(self, msg):
         """Transient status message. Never raises — safe to call anywhere.
         v1.41.0: the bottom status bar is hidden (his has none), so the
@@ -7844,7 +9315,7 @@ class MainWindow(QMainWindow):
         self.repaint()
 
     def refresh_all(self):
-        for pg in (self.dashboard, self.versions, self.mods, self.host, self.backups, self.help, self.settings, self.tools): pg.refresh()
+        for pg in (self.dashboard, self.versions, self.mods, self.gameoptions, self.servers, self.host, self.backups, self.help, self.settings, self.tools): pg.refresh()
         try:
             if getattr(self, "titlebar", None) is not None and getattr(self.titlebar, "profile_name_label", None) is not None:
                 self.titlebar.profile_name_label.setText(str(self.store.get("active_profile", "Default") or "Default"))
@@ -8028,13 +9499,42 @@ def main():
         store.set("theme", "ember")
     apply_theme(store.get("theme", "ember"), store)
     _set_palette()
-    # No splash screen (v1.28.3): the old QSplashScreen was the small
-    # flashing "LEGACY ARK" window on launch. MainWindow builds its
-    # cards before win.show(), so there is no half-painted window to
-    # cover — the splash itself was the flash.
+    # v1.71.0: splash screen restored — the v1.28.3 removal happened
+    # while the window-flashing bugs were still live; those are fixed
+    # now (v1.28.13 parents, v1.28.4/5 opacity + centering), so the
+    # branded Loading... screen is safe to show again while the UI
+    # builds. It is cosmetic only: any failure here never breaks
+    # startup, and it is always closed once the main window appears
+    # (or if the build itself fails, so a crash can never leave it
+    # stuck on screen).
+    splash = None
+    try:
+        _pm = _splash_pixmap()
+        splash = QSplashScreen(_pm)
+        try:
+            # v1.71.1: true pill shape — the pixmap is a square, so
+            # without a mask its black corners poke past the rounded
+            # border (his screenshot). Clip the window itself to the
+            # rounded rect; a mask failure just falls back to the
+            # square splash, never breaks startup.
+            _path = QPainterPath()
+            _path.addRoundedRect(QRectF(0, 0, _pm.width(), _pm.height()), 10, 10)
+            splash.setMask(QRegion(_path.toFillPolygon().toPolygon()))
+        except Exception:
+            pass
+        splash.show()
+        app.processEvents()
+    except Exception:
+        splash = None
     _dump_windows("before-MainWindow")
     store = Store()
-    win = MainWindow(store)
+    try:
+        win = MainWindow(store)
+    except Exception:
+        try:
+            if splash is not None: splash.close()
+        except Exception: pass
+        raise
     _dump_windows("after-MainWindow-before-show")
     try:
         _scr = app.primaryScreen()
@@ -8047,6 +9547,9 @@ def main():
     if store.get("start_maximized"):
         try: win.showMaximized()
         except Exception: pass
+    try:
+        if splash is not None: splash.finish(win)
+    except Exception: pass
     # v1.64.0: the v1.28.8 startup window diagnostic (which wrote
     # launcher-windows.log on every launch) is removed — the flashing
     # bug it hunted was fixed in v1.28.13, so no log file is created.
