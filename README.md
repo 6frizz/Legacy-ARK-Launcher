@@ -10,8 +10,6 @@ Pick a build, download it, and play it. It also handles Workshop mods, hosting a
 
 ## What this is NOT
 
-- **It does not include ARK.** No game files are in this repo, and no game files are distributed with the launcher.
-- **It does not give you ARK for free.** You must own ARK: Survival Evolved on Steam. The launcher downloads old builds through **your own Steam account** using Valve's SteamCMD, and Steam will only serve builds you own.
 - **It does not handle your Steam password.** You type your password / Steam Guard code yourself, in SteamCMD's own window, when Steam asks. The launcher never asks for, stores, types, or passes your password — it only passes `+login <your username>`.
 
 ## Requirements
